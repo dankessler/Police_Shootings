@@ -259,32 +259,36 @@ vector[N] Ones;
 }
 
 parameters {
- vector[4] Theta;
+ vector[2] Theta;
  vector[N] log_Y;
  real<lower=0> Sigma;
  #real<lower=25,upper=155> iHate;
-# real<lower=0,upper=MaxWhiteAssault> iWhiteAssault[NmissWhiteAssault];
-# real<lower=MinBlackAssault,upper=MaxBlackAssault> iBlackAssault[NmissBlackAssault];
+ real<lower=0,upper=MaxWhiteAssault> iWhiteAssault[NmissWhiteAssault];
+ real<lower=MinBlackAssault,upper=MaxBlackAssault> iBlackAssault[NmissBlackAssault];
  real<lower=0,upper=MaxWhiteWeapons> iWhiteWeapons[NmissWhiteWeapons];
  real<lower=MinBlackWeapons,upper=MaxBlackWeapons> iBlackWeapons[NmissBlackWeapons];
  }
  
 transformed parameters{
-#vector<lower=0>[N] DataWhiteAssault;
-#vector[N] DataBlackAssault;
+vector<lower=0>[N] DataWhiteAssault;
+vector[N] DataBlackAssault;
 vector<lower=0>[N] DataWhiteWeapons;
 vector[N] DataBlackWeapons;
+vector<lower=0>[N] DataAssaultRatio;
 #vector<lower=0>[N] DataHate;
 #
 for(t in 1:N){
 #DataHate[t] <-   if_else(DMA[t]==156,iHate,GoogleRacism[DMA[t]] );
 #
-#DataWhiteAssault[t] <- if_else(NonMissWhiteAssault[t], WhiteAssault[t], iWhiteAssault[MissCumSumWhiteAssault[t]]);
-#DataBlackAssault[t] <- if_else(NonMissBlackAssault[t], BlackAssault[t], iBlackAssault[MissCumSumBlackAssault[t]]);
+DataWhiteAssault[t] <- if_else(NonMissWhiteAssault[t], WhiteAssault[t], iWhiteAssault[MissCumSumWhiteAssault[t]]);
+DataBlackAssault[t] <- if_else(NonMissBlackAssault[t], BlackAssault[t], iBlackAssault[MissCumSumBlackAssault[t]]);
 #
 DataWhiteWeapons[t] <- if_else(NonMissWhiteWeapons[t], WhiteWeapons[t], iWhiteWeapons[MissCumSumWhiteWeapons[t]]);
 DataBlackWeapons[t] <- if_else(NonMissBlackWeapons[t], BlackWeapons[t], iBlackWeapons[MissCumSumBlackWeapons[t]]);
+DataAssaultRatio[t] <- DataBlackAssault[t]/DataWhiteAssault[t];
+
              }
+
 }
 
 model {
@@ -303,7 +307,7 @@ Sigma ~ exponential(1);
 #Mu <- ( Theta[1] + Theta[2]*log(Pop) + Theta[3]*log(Gini)   );
 #Mu <- ( Theta[1] + Theta[2]*log(Pop) + Theta[3]*log(DataHate)   );
 #Mu <- ( Theta[1] + Theta[2]*log(Pop) + Theta[3]*log(DataWhiteAssault) + Theta[4]*(DataBlackAssault)  );
-Mu <- ( Theta[1] + Theta[2]*log(Pop) + Theta[3]*log(DataWhiteWeapons) + Theta[4]*(DataBlackWeapons)   );
+#Mu <- ( Theta[1] + Theta[2]*log(Pop) + Theta[3]*log(DataWhiteWeapons) + Theta[4]*(DataBlackWeapons)   );
 
 #Mu <- ( Theta[1] + Theta[2]*log(Pop) + Theta[3]*log(BlackRatio) + Theta[4]*log(Wealth) );
 #Mu <- ( Theta[1] + Theta[2]*log(Pop) + Theta[3]*log(BlackRatio) + Theta[4]*log(Gini)   );
@@ -327,6 +331,9 @@ Mu <- ( Theta[1] + Theta[2]*log(Pop) + Theta[3]*log(DataWhiteWeapons) + Theta[4]
 #Mu <- ( Theta[1] + Theta[2]*log(Pop) + Theta[3]*log(BlackRatio) + Theta[4]*log(Gini) + Theta[5]*log(DataHate)  + Theta[6]*log(DataWhiteWeapons) + Theta[7]*(DataBlackWeapons)   );
 
 #Mu <- ( Theta[1] + Theta[2]*log(Pop) + Theta[3]*log(BlackRatio) + Theta[4]*log(Gini) + Theta[5]*log(Wealth) + Theta[6]*log(DataHate)  + Theta[7]*log(DataWhiteWeapons) + Theta[8]*(DataBlackWeapons)  + Theta[9]*log(DataWhiteAssault) + Theta[10]*(DataBlackAssault)  );
+
+#Mu <- ( Theta[1] + Theta[2]*log(Pop) + Theta[3]*log(BlackRatio) + Theta[4]*log(DataAssaultRatio)   );
+Mu <- ( Theta[1] + Theta[2]*log(DataAssaultRatio)   );
 
 log_Y ~  normal(Mu,Sigma);
 }
