@@ -1,9 +1,9 @@
 [submodule "PoliceShootings/data-police-shootings"]
-	path = data-police-shootings
+	path = submodules/data-police-shootings
 	url = git@github.com:washingtonpost/data-police-shootings
 [submodule "PoliceShootings/city_county_map"]
-	path = city_county_map
+	path = submodules/city_county_map
 	url = git@github.com:dankessler/city_county_map
 [submodule "ctross_publications"]
-	path = ctross_publications
+	path = submodules/ctross_publications
 	url = git@github.com:ctross/Publications
