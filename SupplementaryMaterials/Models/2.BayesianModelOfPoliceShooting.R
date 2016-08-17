@@ -1,6 +1,6 @@
 
 ################################## Load Data ###################################
- d<-read.csv(file.choose()) # MapFileData-WithCountyResultsAndCovariates.csv
+ d<-read.csv('/home/kesslerd/repos/Analysis/PoliceShootings/SupplementaryMaterials/Data/MapFileData-WithCountyResultsAndCovariates.csv') # MapFileData-WithCountyResultsAndCovariates.csv
  library(rstan)
  library(rethinking)
 

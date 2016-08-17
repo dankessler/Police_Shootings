@@ -20,17 +20,45 @@ wapo.summary <- summarizeShooting(wapo)
 wapo.fortify <- fortifyCody(wapo.summary)
 wapo.fortify [ is.na(wapo.fortify$src.cody),1:10][3,2]
 
-## Load Cody's data
-
-cody <- read.csv('/home/kesslerd/repos/Analysis/PoliceShootings/SupplementaryMaterials/Data/MapFileData-WithCountyResultsAndCovariates.csv',stringsAsFactors=FALSE)
 
 
-## Merge WaPo and Cody Data
-cody$src <- 'cody'
-agg.wapo$src <- 'wapo'
+## Run Model1
+N <- nrow(wapo.fortify)
 
-cody2 <- cody[!is.na(cody$County.Name),]
-agg.wapo2 <- agg.wapo[!is.na(agg.wapo$County.Name),]
-full <- merge(x=agg.wapo2,y=cody2,by=c('County.Name','State'),suffixes=c('.wapo','.cody'),all.x=TRUE)
+model_dat <- list(
+                  Nblack=wapo.fortify$BAC_TOT,
+                  Nwhite=wapo.fortify$WA_TOT,
+                  UnarmedBlack=wapo.fortify$B_unarmed,
+                  ArmedBlack=wapo.fortify$B_armed,
+                  UnarmedWhite=wapo.fortify$W_unarmed,
+                  ArmedWhite=wapo.fortify$W_armed
+                  )
 
-## 
+
+print(fitKilling,digits_summary=4,pars=c("Mu"))
+print(fitKilling,digits_summary=4,pars=c("Theta"))
+print(fitKilling,digits_summary=4,pars=c('Mu_RR_Black_Unarmed_Versus_White_Unarmed'))
+
+if(file.exists('/home/kesslerd/repos/Analysis/PoliceShootings/WapoCountyFit.csv')){
+    wapo.countyFit <- read.csv('WapoCountyFit.csv')
+} else {
+    fitKilling <- stan(file='/home/kesslerd/repos/Analysis/PoliceShootings/CountyLevel.stan',
+                   data = model_dat,init=0, thin=1, iter = 2000, warmup=1000,chains = 1,refresh=1)
+    wapo.countyFit <- countyShootings(wapo.fortify,fitKilling)
+    write.csv(wapo.countyFit,'WapoCountyFit.csv',row.names=FALSE)
+}
+
+
+
+
+
+
+## Run Model2
+
+wapo.CovList <- covPrep(wapo.countyFit)
+
+
+fitCov <- stan(file='/home/kesslerd/repos/Analysis/PoliceShootings/Cov_Model12.stan',
+               data = wapo.CovList,thin=1, iter=4000, warmup = 2000, chains =1, refresh =10, pars=c('Theta','Sigma'))
+
+print(fitCov,digits_summary=4,pars=c("Theta","Sigma"))
