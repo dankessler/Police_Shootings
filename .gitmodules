@@ -4,3 +4,6 @@
 [submodule "PoliceShootings/city_county_map"]
 	path = city_county_map
 	url = git@github.com:dankessler/city_county_map
+[submodule "ctross_publications"]
+	path = ctross_publications
+	url = git@github.com:ctross/Publications
