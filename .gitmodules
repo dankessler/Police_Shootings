@@ -1,0 +1,6 @@
+[submodule "PoliceShootings/data-police-shootings"]
+	path = data-police-shootings
+	url = git@github.com:washingtonpost/data-police-shootings
+[submodule "PoliceShootings/city_county_map"]
+	path = city_county_map
+	url = git@github.com:dankessler/city_county_map
