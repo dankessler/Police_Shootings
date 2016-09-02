@@ -10,47 +10,77 @@ Dataframe so that each row uniquely defines a county at a given time, and includ
   - Gini coefficient
 * Modeling
 ** Poisson
+*** Notes
 This approach came out of a meeting with Kerby Shedden on [2017-08-04 Fri].
 
 Let's make this super simple and assume that we have just one county and aren't concerned with race.
 
-X is observed shootings in a time period, so X ~ Poisson(\lambda)
-We could say that \lambda~N(\mu,\sigma)
+X is observed shootings in a time period, so $X \sim \text{Poisson}(\lambda)$
+We could say that $\lambda \sim N(\mu,\sigma)$
 
 Let's introduce the notion of repeated measures, so now
 
-X = (X_{1},X_{2})
+$X = (X_{1},X_{2})$
 
-now, X_{i} ~ Poisson(\lambda_{i})
+now, $X_{i} \sim Poisson(\lambda_{i})$
 
-\lambda_{i} ~ MvNorm(\Mu,\Sigma)
+$\lambda_{i} \sim \text{MvNorm}(\mu,\Sigma)$
 
-We're interested in inference on \Sigma, particularly the off-diagonal elements, as these tell us about the consistency of the risk.
+We're interested in inference on $\Sigma$, particularly the off-diagonal elements, as these tell us about the consistency of the risk.
 
 Now let's consider that different counties will have different populations.
 
-We define the interval space to be people, so \lambda is actually the shooting rate per capita.
+We define the interval space to be people, so $\lambda$ is actually the shooting rate per capita.
+Even narrower: the rate is shootings per N*person-year where N is some scaling term.
 
-Now, X_i ~ N_{i}*Poisson(\lambda_i)
+Now, $X_i \sim N_{i}*Poisson(\lambda_i)$
 
 let 
 - X_{i,j} be the number of observed shootings at timeperiod i for county j
 - N_i,j be the number of people (in convenient units) at timeperiod i for county j
 
-X_{i,j} ~ N_{i,j} * Poisson(\lambda_i,j) 
+$X_{i,j} \sim N_{i,j} * Poisson(\lambda_i,j)$
 
-and \lambda_{i,j} ~ MNormal(\Mu_{j},\Sigma)
+and $\lambda_{i,j} \sim \text{MNormal}(\mu_{j},\Sigma)$
 
-\Mu_j = linear model based on covariates for that county at time i
+$\mu_j$ = linear model based on covariates for that county at time i
 
-\Sigma ~ some prior? I dunno
+$\Sigma \sim$ some prior? I dunno
 
 
 Kerby's notation looks like Poisson regression
 
-E(Y|x) = e^{\theta'x} yeah definitely
+$E(Y|x) = e^{\theta'x}$ yeah definitely
 
-#+BEGIN_SRC R :session 
-  poismodel <- '
 
+
+*** Formal Model
+$r_{i,t} \sim Pois(\lambda_{i,t})$: Rate (Shootings/PersonYear) in County i during interval t
+
+$\vec{\lambda_i} = \begin{bmatrix} \lambda_{i,1}&\lambda_{i,2} & \ldots & \lambda_{i,T} \end{bmatrix} \sim N(\vec{\mu_i},\theta_i)$
+
+$\vec{\mu_i} = \begin{bmatrix} \mu_{i,1}&\mu_{i,2} & \ldots & \mu_{i,T} \end{bmatrix}$
+
+$\mu_{i,t} \sim N(\vec{\beta} X_{i,t},\sigma^2)$
+
+$\vec{\beta} =  \begin{bmatrix} \beta_{1}&\beta_{2} & \ldots & \beta_{K} \end{bmatrix}$
+
+$\beta_k \sim \text{Cauchy}(0,5)$
+
+
+*** Stan Implementation
+#+BEGIN_SRC stan :exports none
+  data {
+    int<lower=0> nc ; // number of counties
+    int<lower=0> X[nc][2]; // number of shootings for county i at time j
+  }
+
+  parameters {
+    real<lower=0> lambda; // the shooting rate?
+  }
+
+  model {
+    for (i in 1:nc)
+        X[i] ~ normal(mu,sigma);
+  }
 #+END_SRC
