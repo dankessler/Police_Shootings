@@ -435,10 +435,17 @@ $x_n$: J-vector (as a row-vector) of J predictors for nth county
 
 $\epsilon_n$ is K-vector of errors for n'th "county"
 ** Poisson Regression (Univariate)
-Assume
+
+$y_n \sim \text{Pois}(\lambda_n)$
+
+$\lambda_n = e^{x_n\beta}$
+
+this seems freakishly simple... and is error-less
+** Negative Binomial Regression
+I think that this is *actually* what Kerby drew. It's like Poisson regression, but with an extra dispersion parameter, usually theta.
 
 
-** Seeming Unrelated Poisson Regressions
+** Seemingly Unrelated Poisson Regressions
 Presume that a stochastic process gives rise to a latent variable $\lambda_{n,t}$ for each county at each time t.
 
 
@@ -452,7 +459,7 @@ we'll need to introduce a latent variable z_n, which I guess is like lambda?
 $y_{n,t} = 
 
 $y_{n,t} \sim \text{Pois}(\lambda_{n,t})$
-** Seeming Unrelated Poisson Regressions of Rates (with Offsets)
+** Seemingly Unrelated Poisson Regressions of Rates (with Offsets)
 
 
 
