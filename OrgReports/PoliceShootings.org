@@ -1,7 +1,275 @@
-
 * Orientation                                                      :noexport:
 * Introduction
 * Data Processing
+** Code
+*** Function Library
+#+NAME: funcs
+#+BEGIN_SRC R :session :results none
+  ## function library
+
+  addCounties <- function(df){
+      names(df)[grepl('state',names(df))] <- 'State' # shift case to match Cody
+      cities <- unique(df[,c('city','State')])
+      handmap <- read.csv('/home/kesslerd/repos/Analysis/PoliceShootings/city_county_map/HandMappings.csv')
+      cities$County.Name <- mapply(getCounty,cities$State,cities$city,MoreArgs=list(handmap=handmap))
+      cities$County.Name <- unlist(cities$County.Name)
+      return(merge(df,cities,all.x=TRUE))
+  }
+
+  getCounty <- function(state,city,handmap){
+      hand.candidate <- handmap[handmap$city==city & handmap$State==state,]
+      if (nrow(hand.candidate)==1){
+          return(hand.candidate['Hand_CountyName'])
+      }
+         
+      candidates <- geo.lookup(state=state,place=city)
+      if (nrow(candidates) < 2){ # confirm that we have some hits
+          return ('NoMatch')
+      }
+      candidates <- candidates[-1,] # drop the first hit which is null
+      candidates <- unique(candidates) # deal with duplicates
+    
+      dists <- adist(city,candidates[,'place.name'])
+      shortest <- min(dists)
+      dups <- sum(dists==shortest)
+      if (dups>1){
+          return('MultiRowMatch')
+      }
+      bestind <- which.min(dists)
+      county <- candidates[bestind,'county.name']
+      return(county)
+  }
+
+
+  binarizeArmed <- function(df){
+      df$armed.binary <- 'armed' # assume everybody is unarmed
+          df$armed.binary <- ifelse(df$armed %in% c('undetermined',''),NA,df$armed.binary) # if unsure, NA
+      df$armed.binary <- ifelse(df$armed %in% c('unarmed'),'unarmed',df$armed.binary) # if unarmed, set it
+      return(df)
+  }
+
+  summarizeShooting <- function(df){
+      df.cast <- dcast(df, State + County.Name ~ race + armed.binary,subset = .(race %in% c('B','W','H') & !is.na(armed.binary)), fun.aggregate=length,value.var='armed.binary')
+      return(df.cast)
+  }
+
+  fortifyCody <- function(df){
+      # merge in Cody's data
+      cody <- read.csv('/home/kesslerd/repos/Analysis/PoliceShootings/SupplementaryMaterials/Data/MapFileData-WithCountyResultsAndCovariates.csv')
+
+      cody$src <- 'cody'
+      df$src <- 'wapo'
+
+      cody <- cody[!is.na(cody$County.Name) & !is.na(cody$State),]
+      df <- df[!is.na(df$County.Name) & !is.na(df$State),]
+
+      df$County.Name <- strtrim(df$County.Name,23) # cody's file is truncated
+      df$County.Name <- iconv(df$County.Name,to='ASCII//TRANSLIT') # cody's file has no accents
+
+      full <- merge(x=df,y=cody,by=c('State','County.Name'),suffixes=c('.wapo','.cody'),all.x=TRUE)
+
+      mask <- complete.cases(
+              full[,c('BAC_TOT',
+              'WA_TOT',
+              'B_unarmed',
+              'B_armed',
+              'W_unarmed',
+              'W_armed')])
+      full <- full[mask,]
+
+      full <- full[,1:64]
+    
+      return(full)
+  }
+
+  countyShootings <- function(df,sfit){
+      # extract county level means and sds
+
+      # extract county-level posteriors, log xform, then get mean and sd, and tack on to df
+      countyRR <- extract(sfit,pars=c('RR_Black_Unarmed_Versus_White_Unarmed'))[[1]]
+
+      countyMeans <- apply(log(countyRR),2,mean)
+      countySDs <- apply(log(countyRR),2,sd)
+
+      df$m.log.RR_Black_Unarmed_Versus_White_Unarmed <- countyMeans
+
+      df$sd.log.RR_Black_Unarmed_Versus_White_Unarmed <-  countySDs
+
+      return(df)
+  }
+
+  covPrep <- function(g){
+  # prepare the dataframe for running covariate models
+  # for now: just model 12 is supported
+  #
+  # note: return the list that stan wants
+
+      Ym<- g$m.log.RR_Black_Unarmed_Versus_White_Unarmed     # First Outcome
+      Ysd<- g$sd.log.RR_Black_Unarmed_Versus_White_Unarmed   #
+      WhiteAssault <- (g$AssaultsWhite.sum/g$WA_TOT)
+      BlackAssault <- (g$AssaultsBlack.sum/g$BAC_TOT)
+
+      Pop<-g$TOT_POP
+
+      BlackRatio<-(g$BAC_TOT+1)/Pop
+
+      g2<- data.frame(g$County.FIPS.Code,Ym,Ysd, Pop,BlackRatio,WhiteAssault,BlackAssault)
+      g3 <- g2[complete.cases(g2$Ym),]
+    
+      Ym  <- g3$Ym
+      Ysd <- g3$Ysd
+    
+      N<-length(Ym)
+
+      Pop <-g3$Pop/sd(g3$Pop,na.rm=T)
+      BlackRatio<-g3$BlackRatio
+
+      WhiteAssault <-g3$WhiteAssault/sd(g3$WhiteAssault,na.rm=T)
+      MaxWhiteAssault<-max(WhiteAssault,na.rm=T)
+    
+      BlackAssault <-g3$BlackAssault/sd(g3$BlackAssault,na.rm=T)
+      MaxBlackAssault<-max(BlackAssault,na.rm=T)
+
+      WhiteAssault <- ifelse(WhiteAssault==0,NA,WhiteAssault)
+      MissCumSumWhiteAssault <-cumsum(is.na(WhiteAssault))
+      MissCumSumWhiteAssault <-ifelse(MissCumSumWhiteAssault ==0,1,MissCumSumWhiteAssault )
+      NonMissWhiteAssault  <-ifelse(is.na(WhiteAssault ),0,1)
+      NmissWhiteAssault <-sum(is.na(WhiteAssault ))
+      WhiteAssault [is.na(WhiteAssault )]<-9999999
+    
+      BlackAssault <- ifelse(BlackAssault==0,NA,BlackAssault)
+      MissCumSumBlackAssault <-cumsum(is.na(BlackAssault))
+      MissCumSumBlackAssault <-ifelse(MissCumSumBlackAssault ==0,1,MissCumSumBlackAssault )
+      NonMissBlackAssault  <-ifelse(is.na(BlackAssault ),0,1)
+      NmissBlackAssault <-sum(is.na(BlackAssault ))
+      BlackAssault [is.na(BlackAssault )]<-9999999
+
+      Ones<-rep(1,N)
+
+      model_dat  <-list(N=N,
+                        Ym=Ym,
+                        Ysd=Ysd,
+
+                        MissCumSumWhiteAssault=MissCumSumWhiteAssault,
+                        NonMissWhiteAssault=NonMissWhiteAssault,
+                        NmissWhiteAssault=NmissWhiteAssault,
+                        WhiteAssault=WhiteAssault,
+                        MaxWhiteAssault=MaxWhiteAssault,
+                      
+                        MissCumSumBlackAssault=MissCumSumBlackAssault,
+                        NonMissBlackAssault=NonMissBlackAssault,
+                        NmissBlackAssault=NmissBlackAssault,
+                        BlackAssault=BlackAssault,
+                        MaxBlackAssault=MaxBlackAssault,
+                      
+                        BlackRatio=BlackRatio,
+                        Pop=Pop,
+
+                        Ones=Ones
+                      
+                        )
+    
+
+  }
+
+#+END_SRC
+
+
+*** Cleaning
+#+BEGIN_SRC R :session
+  # this file aims to replicate all of Cody Ross's analysis
+  # but using the more comprehensive Washington Post data
+
+  library(plyr)
+  library(reshape2)
+  library(acs)
+  library(rstan)
+  rstan_options(auto_write = TRUE)
+  options(mc.cores = parallel::detectCores())
+  options(stringsAsFactors=FALSE)
+
+  ## Load and rearrange the WaPo Data
+  wapo <- read.csv('/home/kesslerd/repos/Analysis/PoliceShootings/data-police-shootings/fatal-police-shootings-data.csv')
+
+  wapo <- addCounties(wapo)
+  wapo <- binarizeArmed(wapo)
+  wapo.summary <- summarizeShooting(wapo)
+
+  wapo.fortify <- fortifyCody(wapo.summary)
+  names(wapo.fortify)
+  #str(wapo.fortify)
+  #wapo.fortify [ is.na(wapo.fortify$src.cody),1:10][3,2]
+#+END_SRC
+
+#+RESULTS:
+| State                         |
+| County.Name                   |
+| B_armed                       |
+| B_unarmed                     |
+| H_armed                       |
+| H_unarmed                     |
+| W_armed                       |
+| W_unarmed                     |
+| src.wapo                      |
+| SortGADMintoPrevOrder         |
+| SortGADMintoGADMintoGADMorder |
+| County.FIPS.Code              |
+| FIPS                          |
+| DMA                           |
+| WeaponsBlack.sum              |
+| WeaponsWhite.sum              |
+| AssaultsBlack.sum             |
+| AssaultsWhite.sum             |
+| county                        |
+| CountyName                    |
+| ID                            |
+| TOT_POP                       |
+| TOT_MALE                      |
+| TOT_FEMALE                    |
+| WA_TOT                        |
+| BAC_TOT                       |
+| H_TOT                         |
+| Pct.Uninsured                 |
+| Median.Income                 |
+| Gini                          |
+| Pct.Living.in.Poverty         |
+| Pct.HS.Education              |
+| PercentSlaveOwningFarms       |
+| NSlavesPerCounty              |
+| ID.1                          |
+| FBIDataToRight                |
+| VictimsOfHateCrimes           |
+| MURDER                        |
+| AGASSLT                       |
+| USPSDToRight                  |
+| BlackArmed                    |
+| BlackUnarmed                  |
+| HispanicArmed                 |
+| HispanicUnarmed               |
+| WhiteArmed                    |
+| WhiteUnarmed                  |
+| State.1                       |
+| RandID                        |
+| SouthernLawCenterDataToRight  |
+| Arson                         |
+| Assault                       |
+| Bombing                       |
+| Cross.Burnings                |
+| Harassment                    |
+| Intelligence                  |
+| Intimidation                  |
+| Leafletting                   |
+| Legal.Developments            |
+| Murder                        |
+| Rally                         |
+| Threat                        |
+| Vandalism                     |
+| BayesianPosterior             |
+| ModelID                       |
+
+
+
+
 ** End Result
 Dataframe so that each row uniquely defines a county at a given time, and includes
 - Number of shootings (totally collapsed)
@@ -51,13 +319,36 @@ $\Sigma \sim$ some prior? I dunno
 Kerby's notation looks like Poisson regression
 
 $E(Y|x) = e^{\theta'x}$ yeah definitely
+*** Formal Model: One Year, No Covariates
+$r_{i} \sim Pois(\lambda_{i})$: Rate (Shootings/PersonYear) in County i
 
+Flat prior for $\lambda$
+*** Formal Model: One Year, with Covariates
+$r_{i} \sim Pois(\lambda_{i})$: Rate (Shootings/PersonYear) in County i
 
+$\lambda_i = \beta X_i$
 
-*** Formal Model
-$r_{i,t} \sim Pois(\lambda_{i,t})$: Rate (Shootings/PersonYear) in County i during interval t
+Flat prior for $\lambda$
+**** Code
+***** Stan
+#+NAME: stan-oneyear-cov
+#+BEGIN_SRC stan
 
-$\vec{\lambda_i} = \begin{bmatrix} \lambda_{i,1}&\lambda_{i,2} & \ldots & \lambda_{i,T} \end{bmatrix} \sim N(\vec{\mu_i},\theta_i)$
+#+END_SRC
+
+*** Formal Model: no Covariates
+$r_{i,t} \sim Pois(\lambda_{i,t})$: Rate (Shootings/PersonYear) in County i during year t
+
+$\vec{\lambda_i} = \begin{bmatrix} \lambda_{i,1}&\lambda_{i,2} & \ldots & \lambda_{i,T} \end{bmatrix} =  N(\vec{\mu_i},\Sigma_i)$
+
+$\vec{\mu_i} = \begin{bmatrix} \mu_{i,1}&\mu_{i,2} & \ldots & \mu_{i,T} \end{bmatrix}$
+
+Flat prior on $\mu_{i,t}$
+
+*** Formal Model: with Covariates
+$r_{i,t} \sim Pois(\lambda_{i,t})$: Shootings in County i during year t
+
+$\vec{\lambda_i} = \begin{bmatrix} \lambda_{i,1}&\lambda_{i,2} & \ldots & \lambda_{i,T} \end{bmatrix} \sim N(\vec{\mu_i},\Sigma_i)$
 
 $\vec{\mu_i} = \begin{bmatrix} \mu_{i,1}&\mu_{i,2} & \ldots & \mu_{i,T} \end{bmatrix}$
 
@@ -68,8 +359,12 @@ $\vec{\beta} =  \begin{bmatrix} \beta_{1}&\beta_{2} & \ldots & \beta_{K} \end{bm
 $\beta_k \sim \text{Cauchy}(0,5)$
 
 
+
+
 *** Stan Implementation
-#+BEGIN_SRC stan :exports none
+**** Stan Code
+#+NAME: somestancode
+#+BEGIN_SRC stan :noweb yes
   data {
     int<lower=0> nc ; // number of counties
     int<lower=0> X[nc][2]; // number of shootings for county i at time j
@@ -83,4 +378,215 @@ $\beta_k \sim \text{Cauchy}(0,5)$
     for (i in 1:nc)
         X[i] ~ normal(mu,sigma);
   }
+#+END_SRC
+**** R Code
+#+BEGIN_SRC R :noweb yes
+  mycode <- " 
+  <<somestancode>> 
+  "
+#+END_SRC
+
+#+RESULTS:
+|                                                                      |
+| data {                                                               |
+| int<lower=0> nc ; // number of counties                              |
+| int<lower=0> X[nc][2]; // number of shootings for county i at time j |
+| }                                                                    |
+|                                                                      |
+| parameters {                                                         |
+| real<lower=0> lambda; // the shooting rate?                          |
+| }                                                                    |
+|                                                                      |
+| model {                                                              |
+| for (i in 1:nc)                                                      |
+| X[i] ~ normal(mu,sigma);                                             |
+| }                                                                    |
+|                                                                      |
+
+*** Example Poisson Regression (Vanilla R)
+#+BEGIN_SRC R :session
+  library(rstan)
+  library(ISwR)
+
+  data(eba1977)
+  summary(eba1977)
+
+  glm1 <- glm(formula     = cases ~ age + city + offset(log(pop)),
+              family      = poisson(link = "log"),
+              data        = eba1977)
+  summary(glm1)
+#+END_SRC
+
+#+RESULTS:
+* STAN Experimentation
+** Seemingly Unrelated Regressions
+SUR is covered on page 77. I think this is precisely our case. We want to know if the regressions are indeed related. 
+
+
+$y_n = \beta x_n + \epsilon_n$ 
+
+$\epsilon_n \sim \mathbb{N}(0,\Sigma)$
+
+$y_n$ K-vector of observations for n'th county
+
+$\beta$: $(K x J)$ matrix of coefficients
+
+$x_n$: J-vector (as a row-vector) of J predictors for nth county
+
+$\epsilon_n$ is K-vector of errors for n'th "county"
+** Poisson Regression (Univariate)
+Assume
+
+
+** Seeming Unrelated Poisson Regressions
+Presume that a stochastic process gives rise to a latent variable $\lambda_{n,t}$ for each county at each time t.
+
+
+
+
+
+$\lambda_n = \beta x_n + \epsilon_n$
+
+we'll need to introduce a latent variable z_n, which I guess is like lambda?
+
+$y_{n,t} = 
+
+$y_{n,t} \sim \text{Pois}(\lambda_{n,t})$
+** Seeming Unrelated Poisson Regressions of Rates (with Offsets)
+
+
+
+** Our Setting: one time point, but with poisson, one stage model
+Each county should likely get identical coefficients, with unique predictors.
+
+In a sense, we want something more like a random effect for each county.
+
+$y_n \sim \text{Pois}(x_n\beta)$ shootings in county n are drawn from Poisson.
+
+$y_n \sim \text{Pois}(\lambda_n)$ shootings in county n are drawn from Poisson with unique lambda
+
+$\lambda_n \sim N(\beta x_n,\sigma)$ The lambda for each county is drawn from a normal, whose central tendency is determined by the prediction. If counties are generally dissimilar, $\sigma$ will be high. If counties generally behave as predicted, $\sigma$ will be small.
+
+If we just expand the scope a tiny bit, we can fold in time
+
+$y_{n,t} \sim \text{Pois}(\lambda_{n,t})$ shootings in county n for time t are drawn from Poisson
+
+$\vec{\lambda_n} = \begin{bmatrix} \lambda_{n,1}&\lambda_{n,2} & \ldots & \lambda_{n,T} \end{bmatrix} \sim N(\vec{\mu_n},\Sigma_n)$ ($\vec{\mu_n}$) is just a convenience here
+
+$\vec{\mu_n} = \begin{bmatrix} x_{n,1}\beta & x_{n,2}\beta & \ldots & x_{n,T}\beta \end{bmatrix}$
+
+** Hierarchical Linear Regression
+
+$y_n \sim N(x_n\beta,\sigma)$
+$\beta_k \sim N(0,\tau)$
+$\tau \sim \text{Cauchy}(0,2.5)$
+
+As $\tau \to 0$ and $\beta_k \to 0$, the posterior density
+$p(\beta,\tau,\sigma \mid y,x) \propto p(y \mid x,\beta,\tau,\sigma)$ 
+grwqos without bound.
+
+** Hierarchical Logistic Regression
+This is worked out beginning on page 62 of the stan manual.
+
+Let's make this explicit. Our outcome is catching a cold. We are tracking a bunch of people who come from different counties.
+
+Each person gets sick or not, $y_n \in \{0,1\}$ and that person comes from one county, indicated by $ll_n \in \{1,\ldots,L\}$. Each person also has a predictor vector $x_n \in \mathbb{R}^D$. Let's say D = 3, and the vector includes 1) their age; 2) if they are male; and 3) if they wash their hands regularly. Each county will get its own coefficient vector relating the predictor vector to risk, $\beta_{l} \in \mathbb{R}^D$. We impose hierarchy in that we draw each individual coefficient for each county, $\beta_{l,d} \in \mathbb{R}$ from a prior that is estimated with the data. The prior, once estimated, determines the amount of pool. If each county acts very similarly, there will be strong pooling enforced by low hierarchical variance. If counties behave very differently, the weak pooling will be enforced by high hierarchical variance.
+
+Here's my attempt to write this as a formal model based on the stan-code below. Let's not try to twist it to fit the police shooting example, because we have a sort of degenerate hierarchical model, as if we've just measured one super person from each county.
+
+$y_n \sim \text{bernoulli}(\frac{1}{1 + e^{-\beta_l X_n}})$ level of the observation
+
+$\beta_{l,d} \sim N(\mu_d,\sigma_d)$ county-level
+
+$\mu_d \sim N(0,100)$ (this is a hyperprior, I suppose?)
+
+
+
+*** Stan
+#+NAME: stan-hlr
+#+BEGIN_SRC stan
+  data {
+    int<lower=1> D; // this is the number of predictors
+    int<lower=0> N; // number of observations
+    int<lower=1> L; // number of counties
+    int<lower=0,upper=1> y[N]; // observations (did peeps get sick?)
+    int<lower=1,upper=L> ll[N]; // county assignments for the peeps
+    row_vector[D} x[N]; //design vector, one for each peep
+  }
+  parameters {
+    real mu[D]; // dunno what this is
+    real<lower=0> sigma[D]; // hierarchical variance?
+    vector[D] beta[L]; // D-length vector for each county l
+  }
+  model {
+    for (d in 1:D) { // consider each predictor separately
+      mu[d] ~ normal(0,100); // mu is the mean from which beta is drawn, same for all counties
+      for (l in 1:L) {
+        beta[l,d] ~ normal(mu[d],sigma[d]); // each beta for each county is drawn from a prior
+      }
+    }
+    for (n in 1:N) {
+      y[n] ~ bernoulli(inv_logit(x[n] * beta[ll[n]])); // each observation is a bernoulli draw with probability p defined by the inverse logit of dot product of predictor and coefficients (standard logistic regression)
+  }
+
+
+#+END_SRC
+** Double Specification
+*** Stan
+#+NAME: stan-double
+#+BEGIN_SRC stan
+  data {
+    int<lower=0> N;
+    vector[N] x;
+    vector[N] y;
+  }
+
+  parameters {
+    real alpha;
+    real beta;
+    real<lower=0> sigma;
+  }
+  model {
+    y ~ normal(alpha + beta * x, sigma);
+
+    y ~ normal(100,0.1);
+  }
+
+#+END_SRC
+*** R Setup
+#+BEGIN_SRC R :session :noweb yes :results none
+  library(rstan)
+
+
+  N <- 100
+
+  sigma <- 2
+  beta <- 3
+
+  noise <- rnorm(N,mean=0,sd=sigma)
+
+  x <- rnorm(N)
+
+  y <- x*beta + noise
+
+  model.data <- list(N,x,y)
+
+  model.stan <- '
+  <<stan-double>>
+  '
+
+
+#+END_SRC
+
+
+*** Run Model
+#+BEGIN_SRC R :session 
+
+  fit <- stan(model_code = model.stan,data=model.data,iter=300)
+
+  summary(fit)
+
+  plot(fit)
+
+  print(fit)
 #+END_SRC
