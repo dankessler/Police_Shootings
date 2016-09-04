@@ -346,17 +346,20 @@ $\vec{\mu_i} = \begin{bmatrix} \mu_{i,1}&\mu_{i,2} & \ldots & \mu_{i,T} \end{bma
 Flat prior on $\mu_{i,t}$
 
 *** Formal Model: with Covariates
+
 $r_{i,t} \sim Pois(\lambda_{i,t})$: Shootings in County i during year t
 
-$\vec{\lambda_i} = \begin{bmatrix} \lambda_{i,1}&\lambda_{i,2} & \ldots & \lambda_{i,T} \end{bmatrix} \sim N(\vec{\mu_i},\Sigma_i)$
+\begin{equation}
+\vec{\lambda_i} = \begin{bmatrix} \lambda_{i,1}&\lambda_{i,2} & \ldots & \lambda_{i,T} \end{bmatrix} \sim N(\vec{\mu_i},\Sigma_i)
+\end{equation}
 
 $\vec{\mu_i} = \begin{bmatrix} \mu_{i,1}&\mu_{i,2} & \ldots & \mu_{i,T} \end{bmatrix}$
 
-$\mu_{i,t} \sim N(\vec{\beta} X_{i,t},\sigma^2)$
+$\mu_i{i,t} = \vec{\beta} X_{i,t}$ alternative version has $\mu$ drawn from a distribution
 
 $\vec{\beta} =  \begin{bmatrix} \beta_{1}&\beta_{2} & \ldots & \beta_{K} \end{bmatrix}$
 
-$\beta_k \sim \text{Cauchy}(0,5)$
+$\beta_k \sim \text{Cauchy}(0,5)$ this decision is random, could easily be flat improper prior
 
 
 
