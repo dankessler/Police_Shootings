@@ -319,6 +319,34 @@ $\Sigma \sim$ some prior? I dunno
 Kerby's notation looks like Poisson regression
 
 $E(Y|x) = e^{\theta'x}$ yeah definitely
+*** LME-Inspired Approach
+Let $C_x$ be an observed count of shootings with associated predictors $x$. For example, $C_x$ could be the number of white people shot in Orange County, Florida, and the associated x would encode the provenance as well as demographic predictors.
+
+
+$C_x \sim \text{Poisson}(\lambda_x)$
+
+$\lambda_x = e^{\theta'x}$
+
+$\theta$ is the vector of coefficients for the GLM. 
+
+Let $\theta$ have block structure as 
+
+$\theta = \begin{bmatrix} \theta_{Offset} & \theta_{Race} & \theta_{Race:Demo} & \theta_{County:Time} \end{bmatrix}$
+
+In most cases the elements of $\theta_{*}$ are simply one or more beta coefficients, which unless otherwise specified have uninformative priors.
+
+Introduce an additional random variable, 
+
+$\vec{\beta}_{County:Time}^{i} = \begin{bmatrix} \beta_{\textit{Y1, County:Time}}^i & \beta_{\textit{Y2, County:Time}}^i \end{bmatrix}$
+
+$\vec{\beta}_{County:Time}^{i} \sim N(0,\Sigma)$
+
+$\theta_{County:Time} = \begin{cases} \beta_{\textit{Y1, County:Time}}^i & \text{Year 1} \\ \beta_{\textit{Y2, County:Time}}^i & \text{Year 2} \end{cases}$
+
+We are then most interested in visualizing the posterior of $\theta_{County:Time}$. The off-diagonal elements of $\Sigma$ will also tell us about the stability of the random effect over time. 
+
+
+
 *** Formal Model: One Year, No Covariates
 $r_{i} \sim Pois(\lambda_{i})$: Rate (Shootings/PersonYear) in County i
 
