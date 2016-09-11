@@ -278,6 +278,7 @@ Dataframe so that each row uniquely defines a county at a given time, and includ
   - Gini coefficient
 * Modeling
 ** Poisson
+
 *** Notes
 This approach came out of a meeting with Kerby Shedden on [2017-08-04 Fri].
 
@@ -421,6 +422,43 @@ $\beta_k \sim \text{Cauchy}(0,5)$ this decision is random, could easily be flat 
 #+END_SRC
 
 #+RESULTS:
+*** Formal Model: Ratios
+
+$C^B_{i,t}$ is the count of black people shot in county i in year t
+
+
+$C^W_{i,t}$ is the count of white people shot in county i in year t
+
+
+$C^B_{i,t} \sim \text{Pois}(\lambda^B_{i,t})$ 
+
+$C^W_{i,t} \sim \text{Pois}(\lambda^W_{i,t})$
+
+
+$\vec{C}_{i,t} = \begin{bmatrix} C^B_{i,t} & C^W_{i,t} \end{bmatrix}$ put counts into time vector
+
+$R_{i,t} = \frac{\lambda^B_{i,t}}{\lambda^W_{i,t}}$ is the relative risk of being shot in county i in year t
+
+$\vec{R}_{i} = \begin{bmatrix} R_{i,1} & R_{i,2} & \dots & R_{i,T} \end{bmatrix}$ put R in time vector
+
+$\vec{R}_{i} \sim \text{N}(\vec{\mu}_i,\Sigma)$ 
+
+$\vec{\mu}_i = \begin{bmatrix} \mu_{i,1} & \mu_{i,2} & \dots & \mu_{i,T} \end{bmatrix}$ put mu in time vector
+
+$\mu_{i,t} = e^{x_{i,t}\beta}$ or equivalently $ln(\mu_{i,t}) = x_{i,t}\beta$
+
+where $x_{i,t}$ is a vector of predictors for county i at time t (e.g. population, relative arrest rate, etc)
+
+Sentence one.
+Sentence two.
+
+Paragraph two.
+Sentence 2-2.
+
+
+
+
+
 * STAN Experimentation
 ** Seemingly Unrelated Regressions
 SUR is covered on page 77. I think this is precisely our case. We want to know if the regressions are indeed related. 
