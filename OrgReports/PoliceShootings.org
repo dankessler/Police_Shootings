@@ -344,8 +344,35 @@ $\vec{\beta}_{County:Time}^{i} \sim N(0,\Sigma)$
 
 $\theta_{County:Time} = \begin{cases} \beta_{\textit{Y1, County:Time}}^i & \text{Year 1} \\ \beta_{\textit{Y2, County:Time}}^i & \text{Year 2} \end{cases}$
 
-We are then most interested in visualizing the posterior of $\theta_{County:Time}$. The off-diagonal elements of $\Sigma$ will also tell us about the stability of the random effect over time. 
-
+We are then most interested in visualizing the posterior of $\theta_{County:Time}$. The off-diagonal elements of $\Sigma$ will also tell us about the stability of the random effect over time.
+**** Stan Code
+#+BEGIN_SRC stan
+  data {
+    int<lower=0> nc ; // number of counties
+    int<lower=0> C[nc][2]; // number of shootings for county i at time j
+    int<lower=0> pDemo; // number of demographic predictors
+  }
+  transformed data {
+    int<lower=0> p;
+    p = 1 + 1 + pDemo + 1; // number of predictors (offset + race demographics + couny:time)
+    vector[p] X[nc]; // demographic predictor for each county
+    for (1 in nc){
+      X[1][1]
+        }
+  }
+  parameters {
+    real theta[];
+    real beta_c;
+               real<lower=0> lambda; // the shooting rate?
+  }
+  transformed parameters {
+  vector theta[]
+  }
+  model {
+    for (i in 1:nc)
+        X[i] ~ normal(mu,sigma);
+  }
+#+END_SRC
 
 
 *** Formal Model: One Year, No Covariates
