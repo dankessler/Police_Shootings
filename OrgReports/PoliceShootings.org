@@ -16,6 +16,11 @@ There is a pressing need to study this phenomenon quantitatively. Why?
 Main Questions
 1. Are Ross's main results replicated in WashPo database?
 2. Is there temporal stability in spatial variation in risk ratios?
+* The Method: Bayesian Methods & Stan
+** Background: Bayesian Methods
+** Background: Stan
+** Obtaining Stan
+** RStan
 * Data Processing: 2 Datasets
 ** Goal
 Our goal is to arrive at a dataset where each row encodes one county. We will have four outcome measures per county (Period X Race). We also require the following covariates
@@ -148,9 +153,480 @@ Drop counties with partial coverage.
 #+BEGIN_SRC R :session :exports code :results none
   unarmed.counts <- unarmed.counts[complete.cases(unarmed.counts),]
 #+END_SRC 
+* Reproduce & Replicate
+** Stan Code
 
 * Repeating Cody Ross Analysis
+
 * Replication with WaPo Data
+* Poisson Models
+** Stan Code
+#+NAME: stan-poisson
+#+BEGIN_SRC stan
+  data {
+    int<lower=0> nc ; // number of counties
+    int<lower=0> Cb1[nc];
+    int<lower=0> Cw1[nc];
+    int<lower=0> pDemo; // number of demographic predictors
+    vector[pDemo] xDemo[nc]; // hold demographic predictors
+    real xOffset[nc,2]; // offset predictor (for each subpopulation)
+  }
+  transformed data {
+    //  int<lower=0> p;
+    vector[pDemo + 5] x[nc,2]; // nc, race, predictor (+1 for intercept, in last)
+    int<lower=0> C[nc,2]; // number of shootings for county i, race j
+    //  p = pDemo + 5; // number of predictors (demographics + offset + race + int + ranint + ranslope)
+    for (i in 1:nc){
+      x[i,1,1:pDemo] = xDemo[i]; // black year 1
+      x[i,2,1:pDemo] = rep_vector(0,pDemo); // white year 1
+
+      x[i,1,pDemo+1] = log(xOffset[i,1]); // black population (offset), log scale for offset
+      x[i,2,pDemo+1] = log(xOffset[i,2]); // white population (offset), log scale for offset
+
+      x[i,1,pDemo+2] = 1; // race (black)
+      x[i,2,pDemo+2] = 0; // race (black)
+
+
+      x[i,1,pDemo+3] = 1; // intercept
+      x[i,2,pDemo+3] = 1; // intercept
+
+      x[i,1,pDemo+4] = 1; // dummy code for county specific beta
+      x[i,2,pDemo+4] = 1; // dummy code for county specific beta
+
+      x[i,1,pDemo+5] = 1; // dummy code for county:race specific beta
+      x[i,2,pDemo+5] = 0; // dummy code for county:race specific beta
+
+    }
+
+
+
+    for (i in 1:nc){
+      C[i,1] = Cb1[i];
+      C[i,2] = Cw1[i];
+    }
+
+
+  }
+  parameters {
+    row_vector[pDemo] beta_RaceDemo; // race:demographic interaction betas
+    real beta_Int; // intercept
+    real beta_Race; // race fx
+    real beta_CountyTime[nc]; // ranfx for county:time
+    real beta_RaceCountyTime[nc]; //ranfx for county:time:race
+    real<lower=0> SigmaCountyTime;
+    real<lower=0> SigmaRaceCountyTime;
+
+  }
+  transformed parameters {
+    row_vector[pDemo+5] theta[nc,2]; // setup a theta predictor for each observation
+    real<lower=0> lambda[nc,2] ; // lambda defines the poisson
+    for (i in 1:nc){
+      theta[i,1,1:pDemo] = beta_RaceDemo; // black year 1
+      theta[i,2,1:pDemo] = beta_RaceDemo; // white year 2
+
+      theta[i,1,pDemo+1] = 1; // population (offset)
+      theta[i,2,pDemo+1] = 1; // population (offset)
+
+      theta[i,1,pDemo+2] = beta_Race; // race (black)
+      theta[i,2,pDemo+2] = beta_Race; // race (black)
+
+      theta[i,1,pDemo+3] = beta_Int; // intercept (global)
+      theta[i,2,pDemo+3] = beta_Int; // intercept (global)
+
+      theta[i,1,pDemo+4] = beta_CountyTime[i]; // county:time specific beta
+      theta[i,2,pDemo+4] = beta_CountyTime[i]; // county:time specific beta
+
+      theta[i,1,pDemo+5] = beta_RaceCountyTime[i]; // county:time:race specific beta
+      theta[i,2,pDemo+5] = beta_RaceCountyTime[i]; // county:time:race specific beta
+    }
+    for (i in 1:nc){
+      for (j in 1:2){
+          lambda[i,j] = exp(theta[i,j] * x[i,j]);
+      }
+    }
+  }
+  model {
+    for (i in 1:nc){
+      for (j in 1:2){
+          C[i,j] ~ poisson_log(lambda[i,j]);
+      }
+    }
+    beta_CountyTime ~ normal(0,SigmaCountyTime);
+    beta_RaceCountyTime ~ normal(0,SigmaRaceCountyTime);
+  }
+#+END_SRC
+** R Code
+#+BEGIN_SRC R :session :noweb yes :results none
+  stanmodel <- '
+  <<stan-poisson>>
+  '
+#+END_SRC
+
+#+BEGIN_SRC R :session
+  stanprep <- unarmed.counts
+  stanprep$log.BW.AssaultRatio <- log(stanprep$BW.AssaultRatio)
+  stanprep$log.BW.PopRatio <- log(stanprep$BW.PopRatio)
+
+  temp <- stanprep[,c('log.BW.AssaultRatio','log.BW.PopRatio')]
+  mask <- apply(temp,1,function(x){all(is.finite(x))})
+  stanprep <- stanprep[mask,]
+
+  stanprep$B.comb <- stanprep$B.uspsd + stanprep$B.wapo
+  stanprep$W.comb <- stanprep$W.uspsd + stanprep$W.wapo
+
+
+  standata <- list(
+      nc = nrow(stanprep),
+      Cb1 = stanprep$B.uspsd,
+      Cw1 = stanprep$W.uspsd,
+      pDemo = 2,
+      xDemo = with(stanprep,cbind(log(BW.AssaultRatio),log(BW.PopRatio))),
+      xOffset = cbind(stanprep$BlackPop/1e5,stanprep$WhitePop/1e5))
+
+
+
+  fit <- stan(model_code=stanmodel, data = standata,thin = 1,iter=4000, warmup = 2000, chains = 1, refresh = 10)
+#+END_SRC
+
+
+
+
+* Simple Poisson Models
+** Stan Code
+#+NAME: stan-poisson
+#+BEGIN_SRC stan
+  data {
+    int<lower=0> nc ; // number of counties
+    int<lower=0> Cb1[nc];
+    int<lower=0> Cw1[nc];
+    int<lower=0> pDemo; // number of demographic predictors
+    vector[pDemo] xDemo[nc]; // hold demographic predictors
+    real xOffset[nc,2]; // offset predictor (for each subpopulation)
+  }
+  transformed data {
+    //  int<lower=0> p;
+    vector[pDemo + 2] x[nc,2]; // nc, race, predictor (+1 for intercept, in last)
+    int<lower=0> C[nc,2]; // number of shootings for county i, race j
+    //  p = pDemo + 5; // number of predictors (demographics + offset + race + int + ranint + ranslope)
+    for (i in 1:nc){
+      x[i,1,1:pDemo] = xDemo[i]; // black year 1
+      x[i,2,1:pDemo] = rep_vector(0,pDemo); // white year 1
+
+      x[i,1,pDemo+1] = log(xOffset[i,1]); // black population (offset), log scale for offset
+      x[i,2,pDemo+1] = log(xOffset[i,2]); // white population (offset), log scale for offset
+
+      x[i,1,pDemo+2] = 1; // race (black)
+      x[i,2,pDemo+2] = 0; // race (black)
+
+
+      x[i,1,pDemo+3] = 1; // intercept
+      x[i,2,pDemo+3] = 1; // intercept
+
+      x[i,1,pDemo+4] = 1; // dummy code for county specific beta
+      x[i,2,pDemo+4] = 1; // dummy code for county specific beta
+
+      x[i,1,pDemo+5] = 1; // dummy code for county:race specific beta
+      x[i,2,pDemo+5] = 0; // dummy code for county:race specific beta
+
+    }
+
+
+
+    for (i in 1:nc){
+      C[i,1] = Cb1[i];
+      C[i,2] = Cw1[i];
+    }
+
+
+  }
+  parameters {
+    row_vector[pDemo] beta_RaceDemo; // race:demographic interaction betas
+    real beta_Int; // intercept
+    real beta_Race; // race fx
+    real beta_CountyTime[nc]; // ranfx for county:time
+    real beta_RaceCountyTime[nc]; //ranfx for county:time:race
+    real<lower=0> SigmaCountyTime;
+    real<lower=0> SigmaRaceCountyTime;
+
+  }
+  transformed parameters {
+    row_vector[pDemo+5] theta[nc,2]; // setup a theta predictor for each observation
+    real<lower=0> lambda[nc,2] ; // lambda defines the poisson
+    for (i in 1:nc){
+      theta[i,1,1:pDemo] = beta_RaceDemo; // black year 1
+      theta[i,2,1:pDemo] = beta_RaceDemo; // white year 2
+
+      theta[i,1,pDemo+1] = 1; // population (offset)
+      theta[i,2,pDemo+1] = 1; // population (offset)
+
+      theta[i,1,pDemo+2] = beta_Race; // race (black)
+      theta[i,2,pDemo+2] = beta_Race; // race (black)
+
+      theta[i,1,pDemo+3] = beta_Int; // intercept (global)
+      theta[i,2,pDemo+3] = beta_Int; // intercept (global)
+
+      theta[i,1,pDemo+4] = beta_CountyTime[i]; // county:time specific beta
+      theta[i,2,pDemo+4] = beta_CountyTime[i]; // county:time specific beta
+
+      theta[i,1,pDemo+5] = beta_RaceCountyTime[i]; // county:time:race specific beta
+      theta[i,2,pDemo+5] = beta_RaceCountyTime[i]; // county:time:race specific beta
+    }
+    for (i in 1:nc){
+      for (j in 1:2){
+          lambda[i,j] = exp(theta[i,j] * x[i,j]);
+      }
+    }
+  }
+  model {
+    for (i in 1:nc){
+      for (j in 1:2){
+          C[i,j] ~ poisson_log(lambda[i,j]);
+      }
+    }
+    beta_CountyTime ~ normal(0,SigmaCountyTime);
+    beta_RaceCountyTime ~ normal(0,SigmaRaceCountyTime);
+  }
+#+END_SRC
+** R Code
+#+BEGIN_SRC R :session :noweb yes :results none
+  stanmodel <- '
+  <<stan-poisson>>
+  '
+#+END_SRC
+
+#+BEGIN_SRC R :session
+  stanprep <- unarmed.counts
+  stanprep$log.BW.AssaultRatio <- log(stanprep$BW.AssaultRatio)
+  stanprep$log.BW.PopRatio <- log(stanprep$BW.PopRatio)
+
+  temp <- stanprep[,c('log.BW.AssaultRatio','log.BW.PopRatio')]
+  mask <- apply(temp,1,function(x){all(is.finite(x))})
+  stanprep <- stanprep[mask,]
+
+  stanprep$B.comb <- stanprep$B.uspsd + stanprep$B.wapo
+  stanprep$W.comb <- stanprep$W.uspsd + stanprep$W.wapo
+
+
+  standata <- list(
+      nc = nrow(stanprep),
+      Cb1 = stanprep$B.uspsd,
+      Cw1 = stanprep$W.uspsd,
+      pDemo = 2,
+      xDemo = with(stanprep,cbind(log(BW.AssaultRatio),log(BW.PopRatio))),
+      xOffset = cbind(stanprep$BlackPop/1e5,stanprep$WhitePop/1e5))
+
+
+
+  fit <- stan(model_code=stanmodel, data = standata,thin = 1,iter=4000, warmup = 2000, chains = 1, refresh = 10)
+#+END_SRC
+
+
+
+
+
+* No RandInt Stability Analysis
+The following approach draws its inspiration from Generalized Linear Mixed Effects Models, but is articulated in a manner consistent with a Bayesian framework as implemented in stan.
+
+Let $C_x$ be an observed count of shootings with associated predictors $x$. For example, $C_x$ could be the number of white people shot in Orange County, Florida, and the associated x would encode the provenance as well as demographic predictors.
+
+
+$C_x \sim \text{Poisson}(\lambda_x)$
+
+$\lambda_x = e^{\theta'x}$
+
+$\theta$ is the vector of coefficients for the GLM. 
+
+Let $\theta$ have block structure as 
+
+$\theta = \begin{bmatrix} \theta_{Race:Demo} & \theta_{Offset} & \theta_{Race}  & \theta_{Race:County:Time} \end{bmatrix}$ (sequence makes indexing easier)
+
+In most cases the elements of $\theta_{*}$ are simply one or more beta coefficients, which unless otherwise specified have uninformative priors.
+
+Introduce an additional random variable, 
+
+$\vec{\beta}_{County:Time}^{i} = \begin{bmatrix} \beta_{\textit{Y1, County:Time}}^i & \beta_{\textit{Y2, County:Time}}^i \end{bmatrix}$
+
+$\vec{\beta}_{County:Time}^{i} \sim N(0,\Sigma)$
+
+$\theta_{County:Time} = \begin{cases} \beta_{\textit{Y1, County:Time}}^i & \text{Year 1} \\ \beta_{\textit{Y2, County:Time}}^i & \text{Year 2} \end{cases}$
+
+We are then most interested in visualizing the posterior of $\theta_{County:Time}$. The off-diagonal elements of $\Sigma$ will also tell us about the stability of the random effect over time.
+
+Offsets
+- Black Population
+- White Population
+
+Race-specific covariates
+- Total Population
+- log(B:W Assault Arrest Rate)
+- log(B:W Population)
+
+
+** Stan Code
+#+NAME: stan-lme-noint
+#+BEGIN_SRC stan
+  data {
+    int<lower=0> nc ; // number of counties
+    int<lower=0> Cb1[nc];
+    int<lower=0> Cb2[nc]; 
+    int<lower=0> Cw1[nc];
+    int<lower=0> Cw2[nc];
+    int<lower=0> pDemo; // number of demographic predictors
+    vector[pDemo] xDemo[nc]; // hold demographic predictors
+    real xOffset[nc,2]; // offset predictor (for each subpopulation)
+  }
+  transformed data {
+    //  int<lower=0> p;
+    vector[pDemo + 4] x[nc,2,2]; // nc, race, year, predictor (+1 for intercept, in last)
+    int<lower=0> C[nc,2,2]; // number of shootings for county i, race j, time k
+    //  p = pDemo + 5; // number of predictors (demographics + offset + race + int + ranint + ranslope)
+    for (i in 1:nc){
+      x[i,1,1,1:pDemo] = xDemo[i]; // black year 1
+      x[i,1,2,1:pDemo] = xDemo[i]; // black year 2
+      x[i,2,1,1:pDemo] = rep_vector(0,pDemo); // white year 1
+      x[i,2,1,1:pDemo] = rep_vector(0,pDemo); // white year 2
+
+      x[i,1,1,pDemo+1] = log(xOffset[i,1]); // population (offset), log scale for offset
+      x[i,1,2,pDemo+1] = log(xOffset[i,1]); // population (offset), log scale for offset
+      x[i,2,1,pDemo+1] = log(xOffset[i,2]); // population (offset), log scale for offset
+      x[i,2,2,pDemo+1] = log(xOffset[i,2]); // population (offset), log scale for offset
+
+      x[i,1,1,pDemo+2] = 1; // race (black)
+      x[i,1,2,pDemo+2] = 1; // race (black)
+      x[i,2,1,pDemo+2] = 0; // race (black)
+      x[i,2,2,pDemo+2] = 0; // race (black)
+
+
+      x[i,1,1,pDemo+3] = 1; // intercept
+      x[i,1,2,pDemo+3] = 1; // intercept
+      x[i,2,1,pDemo+3] = 1; // intercept
+      x[i,2,2,pDemo+3] = 1; // intercept
+
+      // x[i,1,1,pDemo+4] = 1; // dummy code for county:time specific beta
+      // x[i,1,2,pDemo+4] = 1; // dummy code for county:time specific beta
+      // x[i,2,1,pDemo+4] = 1; // dummy code for county:time specific beta
+      // x[i,2,2,pDemo+4] = 1; // dummy code for county:time specific beta
+
+      x[i,1,1,pDemo+4] = 1; // dummy code for county:time:race specific beta
+      x[i,1,2,pDemo+4] = 1; // dummy code for county:time:race specific beta
+      x[i,2,1,pDemo+4] = 0; // dummy code for county:time:race specific beta
+      x[i,2,2,pDemo+4] = 0; // dummy code for county:time:race specific beta
+
+    }
+
+
+
+    for (i in 1:nc){
+      C[i,1,1] = Cb1[i];
+      C[i,1,2] = Cb2[i];
+      C[i,2,1] = Cw1[i];
+      C[i,2,2] = Cw2[i];
+    }
+
+
+  }
+  parameters {
+    row_vector[pDemo] beta_RaceDemo; // race:demographic interaction betas
+    real beta_Int; // intercept
+    real beta_Race; // race fx
+    //  row_vector[2] beta_CountyTime[nc]; // ranfx for county:time
+    row_vector[2] beta_RaceCountyTime[nc]; //ranfx for county:time:race
+    corr_matrix[2] SigmaCountyTime; // covar for county:time
+    corr_matrix[2] SigmaRaceCountyTime; // covar for county:time:race
+
+
+
+  }
+  transformed parameters {
+    real<lower=0> lambda[nc,2,2] ; // lambda defines the poisson
+    row_vector[pDemo+4] theta[nc,2,2]; // setup a theta predictor for each observation
+    for (i in 1:nc){
+      theta[i,1,1,1:pDemo] = beta_RaceDemo; // black year 1
+      theta[i,1,2,1:pDemo] = beta_RaceDemo; // black year 2
+      theta[i,2,1,1:pDemo] = beta_RaceDemo; // white year 1
+      theta[i,2,1,1:pDemo] = beta_RaceDemo; // white year 2
+
+      theta[i,1,1,pDemo+1] = 1; // population (offset)
+      theta[i,1,2,pDemo+1] = 1; // population (offset)
+      theta[i,2,1,pDemo+1] = 1; // population (offset)
+      theta[i,2,2,pDemo+1] = 1; // population (offset)
+
+      theta[i,1,1,pDemo+2] = beta_Race; // race (black)
+      theta[i,1,2,pDemo+2] = beta_Race; // race (black)
+      theta[i,2,1,pDemo+2] = beta_Race; // race (black)
+      theta[i,2,2,pDemo+2] = beta_Race; // race (black)
+
+      theta[i,1,1,pDemo+3] = beta_Int; // intercept (global)
+      theta[i,1,2,pDemo+3] = beta_Int; // intercept (global)
+      theta[i,2,1,pDemo+3] = beta_Int; // intercept (global)
+      theta[i,2,2,pDemo+3] = beta_Int; // intercept (global)
+
+      // theta[i,1,1,pDemo+4] = beta_CountyTime[i,1]; // county:time specific beta
+      // theta[i,1,2,pDemo+4] = beta_CountyTime[i,2]; // county:time specific beta
+      // theta[i,2,1,pDemo+4] = beta_CountyTime[i,1]; // county:time specific beta
+      // theta[i,2,2,pDemo+4] = beta_CountyTime[i,2]; // county:time specific beta
+
+      theta[i,1,1,pDemo+4] = beta_RaceCountyTime[i,1]; // county:time:race specific beta
+      theta[i,1,2,pDemo+4] = beta_RaceCountyTime[i,2]; // county:time:race specific beta
+      theta[i,2,1,pDemo+4] = beta_RaceCountyTime[i,1]; // county:time:race specific beta
+      theta[i,2,2,pDemo+4] = beta_RaceCountyTime[i,2]; // county:time:race specific beta
+    }
+    for (i in 1:nc){
+      for (j in 1:2){
+        for (k in 1:2){
+          lambda[i,j,k] = exp(theta[i,j,k] * x[i,j,k]);
+        }
+      }
+    }
+  }
+  model {
+    for (i in 1:nc){
+      for (j in 1:2){
+        for (k in 1:2){
+          C[i,j,k] ~ poisson_log(lambda[i,j,k]);
+        }
+      }
+    }
+  //  beta_CountyTime ~ multi_normal(rep_row_vector(0,2),SigmaCountyTime);
+    beta_RaceCountyTime ~ multi_normal(rep_row_vector(0,2),SigmaRaceCountyTime);
+    }
+#+END_SRC
+** R Code
+#+BEGIN_SRC R :session :noweb yes :results none
+  stanmodel <- '
+  <<stan-lme-noint>>
+  '
+#+END_SRC
+
+
+
+#+BEGIN_SRC R :session
+  stanprep <- unarmed.counts
+  stanprep$log.BW.AssaultRatio <- log(stanprep$BW.AssaultRatio)
+  stanprep$log.BW.PopRatio <- log(stanprep$BW.PopRatio)
+
+  temp <- stanprep[,c('log.BW.AssaultRatio','log.BW.PopRatio')]
+  mask <- apply(temp,1,function(x){all(is.finite(x))})
+  stanprep <- stanprep[mask,]
+
+
+  standata <- list(
+      nc = nrow(stanprep),
+      Cb1 = stanprep$B.uspsd,
+      Cb2 = stanprep$B.wapo,
+      Cw1 = stanprep$W.uspsd,
+      Cw2 = stanprep$W.wapo,
+      pDemo = 2,
+      xDemo = with(stanprep,cbind(log(BW.AssaultRatio),log(BW.PopRatio))),
+      xOffset = cbind(stanprep$BlackPop/1e5,stanprep$WhitePop/1e5)
+      )
+
+
+
+
+  fit <- stan(model_code=stanmodel, data = standata,thin = 1,iter=4000, warmup = 2000, chains = 1, refresh = 10,verbose=T)
+#+END_SRC
+
 * Temporal Stability Analysis
 The following approach draws its inspiration from Generalized Linear Mixed Effects Models, but is articulated in a manner consistent with a Bayesian framework as implemented in stan.
 
@@ -200,11 +676,11 @@ Race-specific covariates
     int<lower=0> Cw2[nc];
     int<lower=0> pDemo; // number of demographic predictors
     vector[pDemo] xDemo[nc]; // hold demographic predictors
-    real xOffset[nc]; // offset predictor (population)
+    real xOffset[nc,2]; // offset predictor (for each subpopulation)
   }
   transformed data {
     //  int<lower=0> p;
-    vector[pDemo +5 ] x[nc,2,2]; // nc, race, year, predictor (+1 for intercept, in last)
+    vector[pDemo + 5] x[nc,2,2]; // nc, race, year, predictor (+1 for intercept, in last)
     int<lower=0> C[nc,2,2]; // number of shootings for county i, race j, time k
     //  p = pDemo + 5; // number of predictors (demographics + offset + race + int + ranint + ranslope)
     for (i in 1:nc){
@@ -213,10 +689,10 @@ Race-specific covariates
       x[i,2,1,1:pDemo] = rep_vector(0,pDemo); // white year 1
       x[i,2,1,1:pDemo] = rep_vector(0,pDemo); // white year 2
 
-      x[i,1,1,pDemo+1] = log(xOffset[i]); // population (offset), log scale for offset
-      x[i,1,2,pDemo+1] = log(xOffset[i]); // population (offset), log scale for offset
-      x[i,2,1,pDemo+1] = log(xOffset[i]); // population (offset), log scale for offset
-      x[i,2,2,pDemo+1] = log(xOffset[i]); // population (offset), log scale for offset
+      x[i,1,1,pDemo+1] = log(xOffset[i,1]); // population (offset), log scale for offset
+      x[i,1,2,pDemo+1] = log(xOffset[i,1]); // population (offset), log scale for offset
+      x[i,2,1,pDemo+1] = log(xOffset[i,2]); // population (offset), log scale for offset
+      x[i,2,2,pDemo+1] = log(xOffset[i,2]); // population (offset), log scale for offset
 
       x[i,1,1,pDemo+2] = 1; // race (black)
       x[i,1,2,pDemo+2] = 1; // race (black)
@@ -261,10 +737,12 @@ Race-specific covariates
     corr_matrix[2] SigmaCountyTime; // covar for county:time
     corr_matrix[2] SigmaRaceCountyTime; // covar for county:time:race
 
+
+
   }
   transformed parameters {
-    row_vector[pDemo+5] theta[nc,2,2]; // setup a theta predictor for each observation
     real<lower=0> lambda[nc,2,2] ; // lambda defines the poisson
+    row_vector[pDemo+5] theta[nc,2,2]; // setup a theta predictor for each observation
     for (i in 1:nc){
       theta[i,1,1,1:pDemo] = beta_RaceDemo; // black year 1
       theta[i,1,2,1:pDemo] = beta_RaceDemo; // black year 2
@@ -314,7 +792,7 @@ Race-specific covariates
     }
     beta_CountyTime ~ multi_normal(rep_row_vector(0,2),SigmaCountyTime);
     beta_RaceCountyTime ~ multi_normal(rep_row_vector(0,2),SigmaRaceCountyTime);
-  }
+    }
 #+END_SRC
 ** R Code
 #+BEGIN_SRC R :session :noweb yes :results none
@@ -343,18 +821,19 @@ Race-specific covariates
       Cw2 = stanprep$W.wapo,
       pDemo = 2,
       xDemo = with(stanprep,cbind(log(BW.AssaultRatio),log(BW.PopRatio))),
-      xOffset = stanprep$TotPop / 1e5)
+      xOffset = cbind(stanprep$BlackPop/1e5,stanprep$WhitePop/1e5)
+      )
 
 
 
-  fit <- stan(model_code=stanmodel, data = standata,thin = 1,iter=4000, warmup = 2000, chains = 1, refresh = 10)
+
+  fit <- stan(model_code=stanmodel, data = standata,thin = 1,iter=4000, warmup = 2000, chains = 1, refresh = 10,verbose=T)
 #+END_SRC
+* Old
+** Modeling
+*** Poisson
 
-
-* Modeling
-** Poisson
-
-*** Notes
+**** Notes
 This approach came out of a meeting with Kerby Shedden on [2017-08-04 Fri].
 
 Let's make this super simple and assume that we have just one county and aren't concerned with race.
@@ -395,24 +874,24 @@ $\Sigma \sim$ some prior? I dunno
 Kerby's notation looks like Poisson regression
 
 $E(Y|x) = e^{\theta'x}$ yeah definitely
-*** Formal Model: One Year, No Covariates
+**** Formal Model: One Year, No Covariates
 $r_{i} \sim Pois(\lambda_{i})$: Rate (Shootings/PersonYear) in County i
 
 Flat prior for $\lambda$
-*** Formal Model: One Year, with Covariates
+**** Formal Model: One Year, with Covariates
 $r_{i} \sim Pois(\lambda_{i})$: Rate (Shootings/PersonYear) in County i
 
 $\lambda_i = \beta X_i$
 
 Flat prior for $\lambda$
-**** Code
-***** Stan
+***** Code
+****** Stan
 #+NAME: stan-oneyear-cov
 #+BEGIN_SRC stan
 
 #+END_SRC
 
-*** Formal Model: no Covariates
+**** Formal Model: no Covariates
 $r_{i,t} \sim Pois(\lambda_{i,t})$: Rate (Shootings/PersonYear) in County i during year t
 
 $\vec{\lambda_i} = \begin{bmatrix} \lambda_{i,1}&\lambda_{i,2} & \ldots & \lambda_{i,T} \end{bmatrix} =  N(\vec{\mu_i},\Sigma_i)$
@@ -420,7 +899,7 @@ $\vec{\lambda_i} = \begin{bmatrix} \lambda_{i,1}&\lambda_{i,2} & \ldots & \lambd
 $\vec{\mu_i} = \begin{bmatrix} \mu_{i,1}&\mu_{i,2} & \ldots & \mu_{i,T} \end{bmatrix}$
 
 Flat prior on $\mu_{i,t}$
-*** Poisson Regression: why exponentiate?
+**** Poisson Regression: why exponentiate?
 This started as a draft question on CrossValidated, but perhaps I'm starting to answer my own question as so often happens with Stack Overflow
 
 I'm new to Poisson Regression and am trying to understand the motivation behind what is often either treated definitionally or as an assumption in most texts I can find on the matter.
@@ -454,7 +933,7 @@ thus we have totally avoided having to estimate $\lambda_0$. The key, then, is i
 
 
 
-*** Formal Model: with Covariates
+**** Formal Model: with Covariates
 
 Let $s_{i,t}$ be the number of people shot in county $i$ in year $t$.
 
@@ -484,8 +963,8 @@ By examining the posterior of the off-diagonal elements of $\Sigma_i$ we can exp
 
 
 
-*** Stan Implementation
-**** Stan Code
+**** Stan Implementation
+***** Stan Code
 #+NAME: somestancode
 #+BEGIN_SRC stan :noweb yes
   data {
@@ -502,7 +981,7 @@ By examining the posterior of the off-diagonal elements of $\Sigma_i$ we can exp
         X[i] ~ normal(mu,sigma);
   }
 #+END_SRC
-**** R Code
+***** R Code
 #+BEGIN_SRC R :noweb yes
   mycode <- " 
   <<somestancode>> 
@@ -526,7 +1005,7 @@ By examining the posterior of the off-diagonal elements of $\Sigma_i$ we can exp
 | }                                                                    |
 |                                                                      |
 
-*** Example Poisson Regression (Vanilla R)
+**** Example Poisson Regression (Vanilla R)
 #+BEGIN_SRC R :session
   library(rstan)
   library(ISwR)
@@ -541,7 +1020,7 @@ By examining the posterior of the off-diagonal elements of $\Sigma_i$ we can exp
 #+END_SRC
 
 #+RESULTS:
-*** Formal Model: Ratios
+**** Formal Model: Ratios
 
 $C^B_{i,t}$ is the count of black people shot in county i in year t
 
@@ -578,8 +1057,8 @@ Sentence 2-2.
 
 
 
-* STAN Experimentation
-** Seemingly Unrelated Regressions
+** STAN Experimentation
+*** Seemingly Unrelated Regressions
 SUR is covered on page 77. I think this is precisely our case. We want to know if the regressions are indeed related. 
 
 
@@ -594,18 +1073,18 @@ $\beta$: $(K x J)$ matrix of coefficients
 $x_n$: J-vector (as a row-vector) of J predictors for nth county
 
 $\epsilon_n$ is K-vector of errors for n'th "county"
-** Poisson Regression (Univariate)
+*** Poisson Regression (Univariate)
 
 $y_n \sim \text{Pois}(\lambda_n)$
 
 $\lambda_n = e^{x_n\beta}$
 
 this seems freakishly simple... and is error-less
-** Negative Binomial Regression
+*** Negative Binomial Regression
 I think that this is *actually* what Kerby drew. It's like Poisson regression, but with an extra dispersion parameter, usually theta.
 
 
-** Seemingly Unrelated Poisson Regressions
+*** Seemingly Unrelated Poisson Regressions
 Presume that a stochastic process gives rise to a latent variable $\lambda_{n,t}$ for each county at each time t.
 
 
@@ -619,11 +1098,11 @@ we'll need to introduce a latent variable z_n, which I guess is like lambda?
 $y_{n,t} = 
 
 $y_{n,t} \sim \text{Pois}(\lambda_{n,t})$
-** Seemingly Unrelated Poisson Regressions of Rates (with Offsets)
+*** Seemingly Unrelated Poisson Regressions of Rates (with Offsets)
 
 
 
-** Our Setting: one time point, but with poisson, one stage model
+*** Our Setting: one time point, but with poisson, one stage model
 Each county should likely get identical coefficients, with unique predictors.
 
 In a sense, we want something more like a random effect for each county.
@@ -642,7 +1121,7 @@ $\vec{\lambda_n} = \begin{bmatrix} \lambda_{n,1}&\lambda_{n,2} & \ldots & \lambd
 
 $\vec{\mu_n} = \begin{bmatrix} x_{n,1}\beta & x_{n,2}\beta & \ldots & x_{n,T}\beta \end{bmatrix}$
 
-** Hierarchical Linear Regression
+*** Hierarchical Linear Regression
 
 $y_n \sim N(x_n\beta,\sigma)$
 $\beta_k \sim N(0,\tau)$
@@ -652,7 +1131,7 @@ As $\tau \to 0$ and $\beta_k \to 0$, the posterior density
 $p(\beta,\tau,\sigma \mid y,x) \propto p(y \mid x,\beta,\tau,\sigma)$ 
 grwqos without bound.
 
-** Hierarchical Logistic Regression
+*** Hierarchical Logistic Regression
 This is worked out beginning on page 62 of the stan manual.
 
 Let's make this explicit. Our outcome is catching a cold. We are tracking a bunch of people who come from different counties.
@@ -669,7 +1148,7 @@ $\mu_d \sim N(0,100)$ (this is a hyperprior, I suppose?)
 
 
 
-*** Stan
+**** Stan
 #+NAME: stan-hlr
 #+BEGIN_SRC stan
   data {
@@ -698,8 +1177,8 @@ $\mu_d \sim N(0,100)$ (this is a hyperprior, I suppose?)
 
 
 #+END_SRC
-** Double Specification
-*** Stan
+*** Double Specification
+**** Stan
 #+NAME: stan-double
 #+BEGIN_SRC stan
   data {
@@ -720,7 +1199,7 @@ $\mu_d \sim N(0,100)$ (this is a hyperprior, I suppose?)
   }
 
 #+END_SRC
-*** R Setup
+**** R Setup
 #+BEGIN_SRC R :session :noweb yes :results none
   library(rstan)
 
@@ -746,7 +1225,7 @@ $\mu_d \sim N(0,100)$ (this is a hyperprior, I suppose?)
 #+END_SRC
 
 
-*** Run Model
+**** Run Model
 #+BEGIN_SRC R :session 
 
   fit <- stan(model_code = model.stan,data=model.data,iter=300)
