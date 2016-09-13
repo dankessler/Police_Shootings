@@ -1,11 +1,69 @@
-* Orientation                                                      :noexport:
 * Introduction
-* Data Processing
-** Code
-*** Function Library
-#+NAME: funcs
-#+BEGIN_SRC R :session :results none
-  ## function library
+** The Problem
+US has recently witness a number of high-profile deaths of African-Americans at the hands of the police
+- Michael Brown
+- Eric Garner
+- Walter Scott
+
+There is a pressing need to study this phenomenon quantitatively. Why?
+- Case reports are insufficient and could even be misleading
+- Better understand the causes
+- Help shape solutions
+** An Important Step Forward
+** Key Results
+** Present work
+
+Main Questions
+1. Are Ross's main results replicated in WashPo database?
+2. Is there temporal stability in spatial variation in risk ratios?
+* Data Processing: 2 Datasets
+** Goal
+Our goal is to arrive at a dataset where each row encodes one county. We will have four outcome measures per county (Period X Race). We also require the following covariates
+- Black Population (for use as offset)
+- White Population (for use as offset)
+- Total Population
+- B:W Population
+- B:W Arrest Rate for Assault
+
+We also have a dataset of county-level covariates, obtained from Dr. Ross's github repository. This isn't provided in raw format, but is rather the result of merging county-level shooting rates with some unprovided demographic file. Here, I extract only the demographics of interest.
+** Load Source Data Files
+
+#+BEGIN_SRC R :session :results none :export code
+  cases.uspsd <- read.csv('../submodules/ctross_publications/PLOS-RacialBiasPoliceShootings/Data/MaintainedImprovedData/U.S. Police Shootings Data (Cleaned).csv')
+
+  cases.wapo <- read.csv('../submodules/data-police-shootings/fatal-police-shootings-data.csv')
+
+  mapfile <- read.csv('../submodules/ctross_publications/PLOS-RacialBiasPoliceShootings/Data/MaintainedImprovedData/MapFileData-WithCountyResultsAndCovariates.csv')
+
+  mapfile$BW.PopRatio <- mapfile$BAC_TOT / mapfile$WA_TOT
+  mapfile$BlackAssaultArrest <- mapfile$AssaultsBlack.sum / mapfile$BAC_TOT
+  mapfile$WhiteAssaultArrest <- mapfile$AssaultsWhite.sum / mapfile$WA_TOT
+  mapfile$BW.AssaultRatio <- mapfile$BlackAssaultArrest / mapfile$WhiteAssaultArrest
+
+  county.demographics <- data.frame(
+      County.FIPS.Code = mapfile$County.FIPS.Code,
+      County.Name = mapfile$County.Name,
+      State = mapfile$State,
+      BlackPop = mapfile$BAC_TOT,
+      WhitePop = mapfile$WA_TOT,
+      TotPop = mapfile$TOT_POP,
+      BW.PopRatio = mapfile$BW.PopRatio,
+      BW.AssaultRatio = mapfile$BW.AssaultRatio)
+
+  rm(mapfile) # tidy up the namespace
+#+END_SRC
+
+** Map to Counties
+*** USPSD
+We can skip this step, because Cody Ross's github already provides data in a more processed format that we'll load downstream.
+
+*** WaPo
+The Washington Post Database has info at a city-state level. In order to merge the WaPo database with the USPSD database, we must annotate each entry with the county and associated code.
+
+First, let's define some helpful functions. We rely on the geo.lookup function from the acs package. However, it sometimes returns multiple (or no) county mappings for certain entities, which we must correct by hand using a hand-tuned map.  In an attempt to make future City, State -> County mapping, we've made the hand-tuned map available on [[https://github.com/dankessler/city_county_map][github]].
+
+#+BEGIN_SRC R :session :results none :export code
+  library(acs)
 
   addCounties <- function(df){
       names(df)[grepl('state',names(df))] <- 'State' # shift case to match Cody
@@ -21,14 +79,14 @@
       if (nrow(hand.candidate)==1){
           return(hand.candidate['Hand_CountyName'])
       }
-         
+
       candidates <- geo.lookup(state=state,place=city)
       if (nrow(candidates) < 2){ # confirm that we have some hits
           return ('NoMatch')
       }
       candidates <- candidates[-1,] # drop the first hit which is null
       candidates <- unique(candidates) # deal with duplicates
-    
+
       dists <- adist(city,candidates[,'place.name'])
       shortest <- min(dists)
       dups <- sum(dists==shortest)
@@ -39,243 +97,260 @@
       county <- candidates[bestind,'county.name']
       return(county)
   }
-
-
-  binarizeArmed <- function(df){
-      df$armed.binary <- 'armed' # assume everybody is unarmed
-          df$armed.binary <- ifelse(df$armed %in% c('undetermined',''),NA,df$armed.binary) # if unsure, NA
-      df$armed.binary <- ifelse(df$armed %in% c('unarmed'),'unarmed',df$armed.binary) # if unarmed, set it
-      return(df)
-  }
-
-  summarizeShooting <- function(df){
-      df.cast <- dcast(df, State + County.Name ~ race + armed.binary,subset = .(race %in% c('B','W','H') & !is.na(armed.binary)), fun.aggregate=length,value.var='armed.binary')
-      return(df.cast)
-  }
-
-  fortifyCody <- function(df){
-      # merge in Cody's data
-      cody <- read.csv('/home/kesslerd/repos/Analysis/PoliceShootings/SupplementaryMaterials/Data/MapFileData-WithCountyResultsAndCovariates.csv')
-
-      cody$src <- 'cody'
-      df$src <- 'wapo'
-
-      cody <- cody[!is.na(cody$County.Name) & !is.na(cody$State),]
-      df <- df[!is.na(df$County.Name) & !is.na(df$State),]
-
-      df$County.Name <- strtrim(df$County.Name,23) # cody's file is truncated
-      df$County.Name <- iconv(df$County.Name,to='ASCII//TRANSLIT') # cody's file has no accents
-
-      full <- merge(x=df,y=cody,by=c('State','County.Name'),suffixes=c('.wapo','.cody'),all.x=TRUE)
-
-      mask <- complete.cases(
-              full[,c('BAC_TOT',
-              'WA_TOT',
-              'B_unarmed',
-              'B_armed',
-              'W_unarmed',
-              'W_armed')])
-      full <- full[mask,]
-
-      full <- full[,1:64]
-    
-      return(full)
-  }
-
-  countyShootings <- function(df,sfit){
-      # extract county level means and sds
-
-      # extract county-level posteriors, log xform, then get mean and sd, and tack on to df
-      countyRR <- extract(sfit,pars=c('RR_Black_Unarmed_Versus_White_Unarmed'))[[1]]
-
-      countyMeans <- apply(log(countyRR),2,mean)
-      countySDs <- apply(log(countyRR),2,sd)
-
-      df$m.log.RR_Black_Unarmed_Versus_White_Unarmed <- countyMeans
-
-      df$sd.log.RR_Black_Unarmed_Versus_White_Unarmed <-  countySDs
-
-      return(df)
-  }
-
-  covPrep <- function(g){
-  # prepare the dataframe for running covariate models
-  # for now: just model 12 is supported
-  #
-  # note: return the list that stan wants
-
-      Ym<- g$m.log.RR_Black_Unarmed_Versus_White_Unarmed     # First Outcome
-      Ysd<- g$sd.log.RR_Black_Unarmed_Versus_White_Unarmed   #
-      WhiteAssault <- (g$AssaultsWhite.sum/g$WA_TOT)
-      BlackAssault <- (g$AssaultsBlack.sum/g$BAC_TOT)
-
-      Pop<-g$TOT_POP
-
-      BlackRatio<-(g$BAC_TOT+1)/Pop
-
-      g2<- data.frame(g$County.FIPS.Code,Ym,Ysd, Pop,BlackRatio,WhiteAssault,BlackAssault)
-      g3 <- g2[complete.cases(g2$Ym),]
-    
-      Ym  <- g3$Ym
-      Ysd <- g3$Ysd
-    
-      N<-length(Ym)
-
-      Pop <-g3$Pop/sd(g3$Pop,na.rm=T)
-      BlackRatio<-g3$BlackRatio
-
-      WhiteAssault <-g3$WhiteAssault/sd(g3$WhiteAssault,na.rm=T)
-      MaxWhiteAssault<-max(WhiteAssault,na.rm=T)
-    
-      BlackAssault <-g3$BlackAssault/sd(g3$BlackAssault,na.rm=T)
-      MaxBlackAssault<-max(BlackAssault,na.rm=T)
-
-      WhiteAssault <- ifelse(WhiteAssault==0,NA,WhiteAssault)
-      MissCumSumWhiteAssault <-cumsum(is.na(WhiteAssault))
-      MissCumSumWhiteAssault <-ifelse(MissCumSumWhiteAssault ==0,1,MissCumSumWhiteAssault )
-      NonMissWhiteAssault  <-ifelse(is.na(WhiteAssault ),0,1)
-      NmissWhiteAssault <-sum(is.na(WhiteAssault ))
-      WhiteAssault [is.na(WhiteAssault )]<-9999999
-    
-      BlackAssault <- ifelse(BlackAssault==0,NA,BlackAssault)
-      MissCumSumBlackAssault <-cumsum(is.na(BlackAssault))
-      MissCumSumBlackAssault <-ifelse(MissCumSumBlackAssault ==0,1,MissCumSumBlackAssault )
-      NonMissBlackAssault  <-ifelse(is.na(BlackAssault ),0,1)
-      NmissBlackAssault <-sum(is.na(BlackAssault ))
-      BlackAssault [is.na(BlackAssault )]<-9999999
-
-      Ones<-rep(1,N)
-
-      model_dat  <-list(N=N,
-                        Ym=Ym,
-                        Ysd=Ysd,
-
-                        MissCumSumWhiteAssault=MissCumSumWhiteAssault,
-                        NonMissWhiteAssault=NonMissWhiteAssault,
-                        NmissWhiteAssault=NmissWhiteAssault,
-                        WhiteAssault=WhiteAssault,
-                        MaxWhiteAssault=MaxWhiteAssault,
-                      
-                        MissCumSumBlackAssault=MissCumSumBlackAssault,
-                        NonMissBlackAssault=NonMissBlackAssault,
-                        NmissBlackAssault=NmissBlackAssault,
-                        BlackAssault=BlackAssault,
-                        MaxBlackAssault=MaxBlackAssault,
-                      
-                        BlackRatio=BlackRatio,
-                        Pop=Pop,
-
-                        Ones=Ones
-                      
-                        )
-    
-
-  }
-
 #+END_SRC
 
+Next, we'll use them to clean up the WaPo dataset.
 
-*** Cleaning
-#+BEGIN_SRC R :session
-  # this file aims to replicate all of Cody Ross's analysis
-  # but using the more comprehensive Washington Post data
+#+BEGIN_SRC R :session :results none :export code
+  cases.wapo <- addCounties(cases.wapo)
+#+END_SRC
 
-  library(plyr)
+** Summarize by County, Armed Status, and Race
+Again, the treatment for each file is a bit different, as they structure their incident data differently.
+*** USPSD
+Conveniently, Cody's repository provides the file in a format with summaries already calculated and covariates included. For convenience sake, we're going to jump to this point in the stream and extract only the critical pieces of information, so that we can merge with WaPo data and add covariates later.
+
+#+BEGIN_SRC R :session :results none :exports code
+  cases.uspsd <- read.csv('../submodules/ctross_publications/PLOS-RacialBiasPoliceShootings/Data/MaintainedImprovedData/MapFileData-WithCountyResultsAndCovariates.csv')
+
+  uspsd <- data.frame(
+      State = cases.uspsd$State,
+      County.Name = cases.uspsd$County.Name,
+      B = cases.uspsd$BlackUnarmed,
+      W = cases.uspsd$WhiteUnarmed)
+#+END_SRC
+*** WaPo
+The WaPo data is quite granular with respect to what weapon (if any) was carried by the civilian. Because we are interested specifically in unarmed civilians, we only count cases annotated as "unarmed."
+#+BEGIN_SRC R :session :results none :exports code
   library(reshape2)
-  library(acs)
-  library(rstan)
-  rstan_options(auto_write = TRUE)
-  options(mc.cores = parallel::detectCores())
-  options(stringsAsFactors=FALSE)
 
-  ## Load and rearrange the WaPo Data
-  wapo <- read.csv('/home/kesslerd/repos/Analysis/PoliceShootings/data-police-shootings/fatal-police-shootings-data.csv')
+  wapo <- dcast(cases.wapo, State + County.Name ~ race, subset = .(race %in% c('B','W') & cases.wapo$armed=='unarmed'),fun.aggregate=length)
 
-  wapo <- addCounties(wapo)
-  wapo <- binarizeArmed(wapo)
-  wapo.summary <- summarizeShooting(wapo)
+#+END_SRC
+** Merge USPSD and WaPo
+Next we combine the two files, with suffixes such that we can identify the source. There are a small number of counties that appear in only one dataset. In these cases, we replace the missing data with 0 shootings, since this means there were none reported.
 
-  wapo.fortify <- fortifyCody(wapo.summary)
-  names(wapo.fortify)
-  #str(wapo.fortify)
-  #wapo.fortify [ is.na(wapo.fortify$src.cody),1:10][3,2]
+#+BEGIN_SRC R :session :exports code :results none
+  unarmed.counts <- merge(wapo,uspsd,by=c('State','County.Name'),suffixes=c('.wapo','.uspsd'))
+
+  # change NAs to 0s
+  unarmed.counts[,c('B.wapo','W.wapo','B.uspsd','W.uspsd')] <- apply(unarmed.counts[,c('B.wapo','W.wapo','B.uspsd','W.uspsd')],c(1,2),function(x){ifelse(is.na(x),0,x)})
+#+END_SRC
+** Merge with County-Level Covariates
+For all of the counties that appear in our merged file, we add county level demographics.
+
+#+BEGIN_SRC R :session :exports code :results none
+  unarmed.counts <- merge(unarmed.counts,county.demographics,all.x=TRUE,all.y=FALSE)
+#+END_SRC
+** Clean Dataset
+Drop counties with partial coverage.
+
+#+BEGIN_SRC R :session :exports code :results none
+  unarmed.counts <- unarmed.counts[complete.cases(unarmed.counts),]
+#+END_SRC 
+
+* Repeating Cody Ross Analysis
+* Replication with WaPo Data
+* Temporal Stability Analysis
+The following approach draws its inspiration from Generalized Linear Mixed Effects Models, but is articulated in a manner consistent with a Bayesian framework as implemented in stan.
+
+Let $C_x$ be an observed count of shootings with associated predictors $x$. For example, $C_x$ could be the number of white people shot in Orange County, Florida, and the associated x would encode the provenance as well as demographic predictors.
+
+
+$C_x \sim \text{Poisson}(\lambda_x)$
+
+$\lambda_x = e^{\theta'x}$
+
+$\theta$ is the vector of coefficients for the GLM. 
+
+Let $\theta$ have block structure as 
+
+$\theta = \begin{bmatrix} \theta_{Race:Demo} & \theta_{Offset} & \theta_{Race}  & \theta_{Race:County:Time} \end{bmatrix}$ (sequence makes indexing easier)
+
+In most cases the elements of $\theta_{*}$ are simply one or more beta coefficients, which unless otherwise specified have uninformative priors.
+
+Introduce an additional random variable, 
+
+$\vec{\beta}_{County:Time}^{i} = \begin{bmatrix} \beta_{\textit{Y1, County:Time}}^i & \beta_{\textit{Y2, County:Time}}^i \end{bmatrix}$
+
+$\vec{\beta}_{County:Time}^{i} \sim N(0,\Sigma)$
+
+$\theta_{County:Time} = \begin{cases} \beta_{\textit{Y1, County:Time}}^i & \text{Year 1} \\ \beta_{\textit{Y2, County:Time}}^i & \text{Year 2} \end{cases}$
+
+We are then most interested in visualizing the posterior of $\theta_{County:Time}$. The off-diagonal elements of $\Sigma$ will also tell us about the stability of the random effect over time.
+
+Offsets
+- Black Population
+- White Population
+
+Race-specific covariates
+- Total Population
+- log(B:W Assault Arrest Rate)
+- log(B:W Population)
+
+
+** Stan Code
+#+NAME: stan-lme
+#+BEGIN_SRC stan
+  data {
+    int<lower=0> nc ; // number of counties
+    int<lower=0> Cb1[nc];
+    int<lower=0> Cb2[nc]; 
+    int<lower=0> Cw1[nc];
+    int<lower=0> Cw2[nc];
+    int<lower=0> pDemo; // number of demographic predictors
+    vector[pDemo] xDemo[nc]; // hold demographic predictors
+    real xOffset[nc]; // offset predictor (population)
+  }
+  transformed data {
+    //  int<lower=0> p;
+    vector[pDemo +5 ] x[nc,2,2]; // nc, race, year, predictor (+1 for intercept, in last)
+    int<lower=0> C[nc,2,2]; // number of shootings for county i, race j, time k
+    //  p = pDemo + 5; // number of predictors (demographics + offset + race + int + ranint + ranslope)
+    for (i in 1:nc){
+      x[i,1,1,1:pDemo] = xDemo[i]; // black year 1
+      x[i,1,2,1:pDemo] = xDemo[i]; // black year 2
+      x[i,2,1,1:pDemo] = rep_vector(0,pDemo); // white year 1
+      x[i,2,1,1:pDemo] = rep_vector(0,pDemo); // white year 2
+
+      x[i,1,1,pDemo+1] = log(xOffset[i]); // population (offset), log scale for offset
+      x[i,1,2,pDemo+1] = log(xOffset[i]); // population (offset), log scale for offset
+      x[i,2,1,pDemo+1] = log(xOffset[i]); // population (offset), log scale for offset
+      x[i,2,2,pDemo+1] = log(xOffset[i]); // population (offset), log scale for offset
+
+      x[i,1,1,pDemo+2] = 1; // race (black)
+      x[i,1,2,pDemo+2] = 1; // race (black)
+      x[i,2,1,pDemo+2] = 0; // race (black)
+      x[i,2,2,pDemo+2] = 0; // race (black)
+
+
+      x[i,1,1,pDemo+3] = 1; // intercept
+      x[i,1,2,pDemo+3] = 1; // intercept
+      x[i,2,1,pDemo+3] = 1; // intercept
+      x[i,2,2,pDemo+3] = 1; // intercept
+
+      x[i,1,1,pDemo+4] = 1; // dummy code for county:time specific beta
+      x[i,1,2,pDemo+4] = 1; // dummy code for county:time specific beta
+      x[i,2,1,pDemo+4] = 1; // dummy code for county:time specific beta
+      x[i,2,2,pDemo+4] = 1; // dummy code for county:time specific beta
+
+      x[i,1,1,pDemo+5] = 1; // dummy code for county:time:race specific beta
+      x[i,1,2,pDemo+5] = 1; // dummy code for county:time:race specific beta
+      x[i,2,1,pDemo+5] = 0; // dummy code for county:time:race specific beta
+      x[i,2,2,pDemo+5] = 0; // dummy code for county:time:race specific beta
+
+    }
+
+
+
+    for (i in 1:nc){
+      C[i,1,1] = Cb1[i];
+      C[i,1,2] = Cb2[i];
+      C[i,2,1] = Cw1[i];
+      C[i,2,2] = Cw2[i];
+    }
+
+
+  }
+  parameters {
+    row_vector[pDemo] beta_RaceDemo; // race:demographic interaction betas
+    real beta_Int; // intercept
+    real beta_Race; // race fx
+    row_vector[2] beta_CountyTime[nc]; // ranfx for county:time
+    row_vector[2] beta_RaceCountyTime[nc]; //ranfx for county:time:race
+    corr_matrix[2] SigmaCountyTime; // covar for county:time
+    corr_matrix[2] SigmaRaceCountyTime; // covar for county:time:race
+
+  }
+  transformed parameters {
+    row_vector[pDemo+5] theta[nc,2,2]; // setup a theta predictor for each observation
+    real<lower=0> lambda[nc,2,2] ; // lambda defines the poisson
+    for (i in 1:nc){
+      theta[i,1,1,1:pDemo] = beta_RaceDemo; // black year 1
+      theta[i,1,2,1:pDemo] = beta_RaceDemo; // black year 2
+      theta[i,2,1,1:pDemo] = beta_RaceDemo; // white year 1
+      theta[i,2,1,1:pDemo] = beta_RaceDemo; // white year 2
+
+      theta[i,1,1,pDemo+1] = 1; // population (offset)
+      theta[i,1,2,pDemo+1] = 1; // population (offset)
+      theta[i,2,1,pDemo+1] = 1; // population (offset)
+      theta[i,2,2,pDemo+1] = 1; // population (offset)
+
+      theta[i,1,1,pDemo+2] = beta_Race; // race (black)
+      theta[i,1,2,pDemo+2] = beta_Race; // race (black)
+      theta[i,2,1,pDemo+2] = beta_Race; // race (black)
+      theta[i,2,2,pDemo+2] = beta_Race; // race (black)
+
+      theta[i,1,1,pDemo+3] = beta_Int; // intercept (global)
+      theta[i,1,2,pDemo+3] = beta_Int; // intercept (global)
+      theta[i,2,1,pDemo+3] = beta_Int; // intercept (global)
+      theta[i,2,2,pDemo+3] = beta_Int; // intercept (global)
+
+      theta[i,1,1,pDemo+4] = beta_CountyTime[i,1]; // county:time specific beta
+      theta[i,1,2,pDemo+4] = beta_CountyTime[i,2]; // county:time specific beta
+      theta[i,2,1,pDemo+4] = beta_CountyTime[i,1]; // county:time specific beta
+      theta[i,2,2,pDemo+4] = beta_CountyTime[i,2]; // county:time specific beta
+
+      theta[i,1,1,pDemo+5] = beta_RaceCountyTime[i,1]; // county:time:race specific beta
+      theta[i,1,2,pDemo+5] = beta_RaceCountyTime[i,2]; // county:time:race specific beta
+      theta[i,2,1,pDemo+5] = beta_RaceCountyTime[i,1]; // county:time:race specific beta
+      theta[i,2,2,pDemo+5] = beta_RaceCountyTime[i,2]; // county:time:race specific beta
+    }
+    for (i in 1:nc){
+      for (j in 1:2){
+        for (k in 1:2){
+          lambda[i,j,k] = exp(theta[i,j,k] * x[i,j,k]);
+        }
+      }
+    }
+  }
+  model {
+    for (i in 1:nc){
+      for (j in 1:2){
+        for (k in 1:2){
+          C[i,j,k] ~ poisson_log(lambda[i,j,k]);
+        }
+      }
+    }
+    beta_CountyTime ~ multi_normal(rep_row_vector(0,2),SigmaCountyTime);
+    beta_RaceCountyTime ~ multi_normal(rep_row_vector(0,2),SigmaRaceCountyTime);
+  }
+#+END_SRC
+** R Code
+#+BEGIN_SRC R :session :noweb yes :results none
+  stanmodel <- '
+  <<stan-lme>>
+  '
 #+END_SRC
 
-#+RESULTS:
-| State                         |
-| County.Name                   |
-| B_armed                       |
-| B_unarmed                     |
-| H_armed                       |
-| H_unarmed                     |
-| W_armed                       |
-| W_unarmed                     |
-| src.wapo                      |
-| SortGADMintoPrevOrder         |
-| SortGADMintoGADMintoGADMorder |
-| County.FIPS.Code              |
-| FIPS                          |
-| DMA                           |
-| WeaponsBlack.sum              |
-| WeaponsWhite.sum              |
-| AssaultsBlack.sum             |
-| AssaultsWhite.sum             |
-| county                        |
-| CountyName                    |
-| ID                            |
-| TOT_POP                       |
-| TOT_MALE                      |
-| TOT_FEMALE                    |
-| WA_TOT                        |
-| BAC_TOT                       |
-| H_TOT                         |
-| Pct.Uninsured                 |
-| Median.Income                 |
-| Gini                          |
-| Pct.Living.in.Poverty         |
-| Pct.HS.Education              |
-| PercentSlaveOwningFarms       |
-| NSlavesPerCounty              |
-| ID.1                          |
-| FBIDataToRight                |
-| VictimsOfHateCrimes           |
-| MURDER                        |
-| AGASSLT                       |
-| USPSDToRight                  |
-| BlackArmed                    |
-| BlackUnarmed                  |
-| HispanicArmed                 |
-| HispanicUnarmed               |
-| WhiteArmed                    |
-| WhiteUnarmed                  |
-| State.1                       |
-| RandID                        |
-| SouthernLawCenterDataToRight  |
-| Arson                         |
-| Assault                       |
-| Bombing                       |
-| Cross.Burnings                |
-| Harassment                    |
-| Intelligence                  |
-| Intimidation                  |
-| Leafletting                   |
-| Legal.Developments            |
-| Murder                        |
-| Rally                         |
-| Threat                        |
-| Vandalism                     |
-| BayesianPosterior             |
-| ModelID                       |
+
+
+#+BEGIN_SRC R :session
+  stanprep <- unarmed.counts
+  stanprep$log.BW.AssaultRatio <- log(stanprep$BW.AssaultRatio)
+  stanprep$log.BW.PopRatio <- log(stanprep$BW.PopRatio)
+
+  temp <- stanprep[,c('log.BW.AssaultRatio','log.BW.PopRatio')]
+  mask <- apply(temp,1,function(x){all(is.finite(x))})
+  stanprep <- stanprep[mask,]
+
+
+  standata <- list(
+      nc = nrow(stanprep),
+      Cb1 = stanprep$B.uspsd,
+      Cb2 = stanprep$B.wapo,
+      Cw1 = stanprep$W.uspsd,
+      Cw2 = stanprep$W.wapo,
+      pDemo = 2,
+      xDemo = with(stanprep,cbind(log(BW.AssaultRatio),log(BW.PopRatio))),
+      xOffset = stanprep$TotPop / 1e5)
 
 
 
+  fit <- stan(model_code=stanmodel, data = standata,thin = 1,iter=4000, warmup = 2000, chains = 1, refresh = 10)
+#+END_SRC
 
-** End Result
-Dataframe so that each row uniquely defines a county at a given time, and includes
-- Number of shootings (totally collapsed)
-- Population of county
-- Covariates
-  - Gini coefficient
+
 * Modeling
 ** Poisson
 
@@ -320,61 +395,6 @@ $\Sigma \sim$ some prior? I dunno
 Kerby's notation looks like Poisson regression
 
 $E(Y|x) = e^{\theta'x}$ yeah definitely
-*** LME-Inspired Approach
-Let $C_x$ be an observed count of shootings with associated predictors $x$. For example, $C_x$ could be the number of white people shot in Orange County, Florida, and the associated x would encode the provenance as well as demographic predictors.
-
-
-$C_x \sim \text{Poisson}(\lambda_x)$
-
-$\lambda_x = e^{\theta'x}$
-
-$\theta$ is the vector of coefficients for the GLM. 
-
-Let $\theta$ have block structure as 
-
-$\theta = \begin{bmatrix} \theta_{Offset} & \theta_{Race} & \theta_{Race:Demo} & \theta_{County:Time} \end{bmatrix}$
-
-In most cases the elements of $\theta_{*}$ are simply one or more beta coefficients, which unless otherwise specified have uninformative priors.
-
-Introduce an additional random variable, 
-
-$\vec{\beta}_{County:Time}^{i} = \begin{bmatrix} \beta_{\textit{Y1, County:Time}}^i & \beta_{\textit{Y2, County:Time}}^i \end{bmatrix}$
-
-$\vec{\beta}_{County:Time}^{i} \sim N(0,\Sigma)$
-
-$\theta_{County:Time} = \begin{cases} \beta_{\textit{Y1, County:Time}}^i & \text{Year 1} \\ \beta_{\textit{Y2, County:Time}}^i & \text{Year 2} \end{cases}$
-
-We are then most interested in visualizing the posterior of $\theta_{County:Time}$. The off-diagonal elements of $\Sigma$ will also tell us about the stability of the random effect over time.
-**** Stan Code
-#+BEGIN_SRC stan
-  data {
-    int<lower=0> nc ; // number of counties
-    int<lower=0> C[nc][2]; // number of shootings for county i at time j
-    int<lower=0> pDemo; // number of demographic predictors
-  }
-  transformed data {
-    int<lower=0> p;
-    p = 1 + 1 + pDemo + 1; // number of predictors (offset + race demographics + couny:time)
-    vector[p] X[nc]; // demographic predictor for each county
-    for (1 in nc){
-      X[1][1]
-        }
-  }
-  parameters {
-    real theta[];
-    real beta_c;
-               real<lower=0> lambda; // the shooting rate?
-  }
-  transformed parameters {
-  vector theta[]
-  }
-  model {
-    for (i in 1:nc)
-        X[i] ~ normal(mu,sigma);
-  }
-#+END_SRC
-
-
 *** Formal Model: One Year, No Covariates
 $r_{i} \sim Pois(\lambda_{i})$: Rate (Shootings/PersonYear) in County i
 
