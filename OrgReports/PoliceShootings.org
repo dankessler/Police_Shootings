@@ -131,6 +131,7 @@ The WaPo data is quite granular with respect to what weapon (if any) was carried
 
   wapo <- dcast(cases.wapo, State + County.Name ~ race, subset = .(race %in% c('B','W') & cases.wapo$armed=='unarmed'),fun.aggregate=length)
 
+
 #+END_SRC
 ** Merge USPSD and WaPo
 Next we combine the two files, with suffixes such that we can identify the source. There are a small number of counties that appear in only one dataset. In these cases, we replace the missing data with 0 shootings, since this means there were none reported.
@@ -628,6 +629,7 @@ Race-specific covariates
 #+END_SRC
 
 * Temporal Stability Analysis
+** Math
 The following approach draws its inspiration from Generalized Linear Mixed Effects Models, but is articulated in a manner consistent with a Bayesian framework as implemented in stan.
 
 Let $C_x$ be an observed count of shootings with associated predictors $x$. For example, $C_x$ could be the number of white people shot in Orange County, Florida, and the associated x would encode the provenance as well as demographic predictors.
@@ -663,8 +665,10 @@ Race-specific covariates
 - Total Population
 - log(B:W Assault Arrest Rate)
 - log(B:W Population)
-
-
+** Simulate Data
+#+BEGIN_SRC R :session :results none :export code
+  randint <- rnorm
+#+END_SRC
 ** Stan Code
 #+NAME: stan-lme
 #+BEGIN_SRC stan
@@ -687,7 +691,7 @@ Race-specific covariates
       x[i,1,1,1:pDemo] = xDemo[i]; // black year 1
       x[i,1,2,1:pDemo] = xDemo[i]; // black year 2
       x[i,2,1,1:pDemo] = rep_vector(0,pDemo); // white year 1
-      x[i,2,1,1:pDemo] = rep_vector(0,pDemo); // white year 2
+      x[i,2,2,1:pDemo] = rep_vector(0,pDemo); // white year 2
 
       x[i,1,1,pDemo+1] = log(xOffset[i,1]); // population (offset), log scale for offset
       x[i,1,2,pDemo+1] = log(xOffset[i,1]); // population (offset), log scale for offset
@@ -734,20 +738,20 @@ Race-specific covariates
     real beta_Race; // race fx
     row_vector[2] beta_CountyTime[nc]; // ranfx for county:time
     row_vector[2] beta_RaceCountyTime[nc]; //ranfx for county:time:race
-    corr_matrix[2] SigmaCountyTime; // covar for county:time
-    corr_matrix[2] SigmaRaceCountyTime; // covar for county:time:race
+    cov_matrix[2] SigmaCountyTime; // covar for county:time
+    cov_matrix[2] SigmaRaceCountyTime; // covar for county:time:race
 
 
 
   }
   transformed parameters {
-    real<lower=0> lambda[nc,2,2] ; // lambda defines the poisson
+    //  real<lower=0> lambda[nc,2,2] ; // lambda defines the poisson
     row_vector[pDemo+5] theta[nc,2,2]; // setup a theta predictor for each observation
     for (i in 1:nc){
       theta[i,1,1,1:pDemo] = beta_RaceDemo; // black year 1
       theta[i,1,2,1:pDemo] = beta_RaceDemo; // black year 2
       theta[i,2,1,1:pDemo] = beta_RaceDemo; // white year 1
-      theta[i,2,1,1:pDemo] = beta_RaceDemo; // white year 2
+      theta[i,2,2,1:pDemo] = beta_RaceDemo; // white year 2
 
       theta[i,1,1,pDemo+1] = 1; // population (offset)
       theta[i,1,2,pDemo+1] = 1; // population (offset)
@@ -774,19 +778,13 @@ Race-specific covariates
       theta[i,2,1,pDemo+5] = beta_RaceCountyTime[i,1]; // county:time:race specific beta
       theta[i,2,2,pDemo+5] = beta_RaceCountyTime[i,2]; // county:time:race specific beta
     }
-    for (i in 1:nc){
-      for (j in 1:2){
-        for (k in 1:2){
-          lambda[i,j,k] = exp(theta[i,j,k] * x[i,j,k]);
-        }
-      }
-    }
+
   }
   model {
     for (i in 1:nc){
       for (j in 1:2){
         for (k in 1:2){
-          C[i,j,k] ~ poisson_log(lambda[i,j,k]);
+          C[i,j,k] ~ poisson_log(theta[i,j,k] * x[i,j,k]);
         }
       }
     }
@@ -821,13 +819,13 @@ Race-specific covariates
       Cw2 = stanprep$W.wapo,
       pDemo = 2,
       xDemo = with(stanprep,cbind(log(BW.AssaultRatio),log(BW.PopRatio))),
-      xOffset = cbind(stanprep$BlackPop/1e5,stanprep$WhitePop/1e5)
+      xOffset = cbind(stanprep$BlackPop,stanprep$WhitePop)
       )
 
 
 
-
-  fit <- stan(model_code=stanmodel, data = standata,thin = 1,iter=4000, warmup = 2000, chains = 1, refresh = 10,verbose=T)
+  fit <- stan(model_code=stanmodel, data = standata,thin = 1,iter=1000, warmup = 100, chains = 1, refresh = 10)
+  fit <- stan(model_code=stanmodel, data = standata,thin = 1,iter=4000, warmup = 2000, chains = 1, refresh = 10)
 #+END_SRC
 * Old
 ** Modeling
