@@ -123,6 +123,12 @@ Conveniently, Cody's repository provides the file in a format with summaries alr
       County.Name = cases.uspsd$County.Name,
       B = cases.uspsd$BlackUnarmed,
       W = cases.uspsd$WhiteUnarmed)
+
+  ## uspsd <- data.frame(
+  ##     State = cases.uspsd$State,
+  ##     County.Name = cases.uspsd$County.Name,
+  ##     B = cases.uspsd$BlackUnarmed + cases.uspsd$BlackArmed,
+  ##     W = cases.uspsd$WhiteUnarmed + cases.uspsd$WhiteArmed)
 #+END_SRC
 *** WaPo
 The WaPo data is quite granular with respect to what weapon (if any) was carried by the civilian. Because we are interested specifically in unarmed civilians, we only count cases annotated as "unarmed."
@@ -131,7 +137,7 @@ The WaPo data is quite granular with respect to what weapon (if any) was carried
 
   wapo <- dcast(cases.wapo, State + County.Name ~ race, subset = .(race %in% c('B','W') & cases.wapo$armed=='unarmed'),fun.aggregate=length)
 
-
+  #wapo <- dcast(cases.wapo, State + County.Name ~ race, subset = .(race %in% c('B','W')),fun.aggregate=length)
 #+END_SRC
 ** Merge USPSD and WaPo
 Next we combine the two files, with suffixes such that we can identify the source. There are a small number of counties that appear in only one dataset. In these cases, we replace the missing data with 0 shootings, since this means there were none reported.
@@ -148,12 +154,6 @@ For all of the counties that appear in our merged file, we add county level demo
 #+BEGIN_SRC R :session :exports code :results none
   unarmed.counts <- merge(unarmed.counts,county.demographics,all.x=TRUE,all.y=FALSE)
 #+END_SRC
-** Clean Dataset
-Drop counties with partial coverage.
-
-#+BEGIN_SRC R :session :exports code :results none
-  unarmed.counts <- unarmed.counts[complete.cases(unarmed.counts),]
-#+END_SRC 
 * Reproduce & Replicate
 ** Stan Code
 
@@ -643,17 +643,19 @@ $\theta$ is the vector of coefficients for the GLM.
 
 Let $\theta$ have block structure as 
 
-$\theta = \begin{bmatrix} \theta_{Race:Demo} & \theta_{Offset} & \theta_{Race}  & \theta_{Race:County:Time} \end{bmatrix}$ (sequence makes indexing easier)
+$\theta = \begin{bmatrix} \theta_{Race:Demo} & \theta_{Offset} & \theta_{Race}  & \theta_{County:Time} & \theta_{Race:County:Time} \end{bmatrix}$
 
 In most cases the elements of $\theta_{*}$ are simply one or more beta coefficients, which unless otherwise specified have uninformative priors.
 
-Introduce an additional random variable, 
+Introduce two additional random variable, 
 
-$\vec{\beta}_{County:Time}^{i} = \begin{bmatrix} \beta_{\textit{Y1, County:Time}}^i & \beta_{\textit{Y2, County:Time}}^i \end{bmatrix}$
+$\vec{\beta}_{County:Time}^{i} = \begin{bmatrix} \beta_{\textit{D1, County:Time}}^i & \beta_{\textit{D2, County:Time}}^i \end{bmatrix}$
+
+$\vec{\beta}_{Race:County:Time}^{i} = \begin{bmatrix} \beta_{\textit{YD, Race:County:Time}}^i & \beta_{\textit{D2, Race:County:Time}}^i \end{bmatrix}$
 
 $\vec{\beta}_{County:Time}^{i} \sim N(0,\Sigma)$
 
-$\theta_{County:Time} = \begin{cases} \beta_{\textit{Y1, County:Time}}^i & \text{Year 1} \\ \beta_{\textit{Y2, County:Time}}^i & \text{Year 2} \end{cases}$
+$\theta_{County:Time} = \begin{cases} \beta_{\textit{D1, County:Time}}^i & \text{Year 1} \\ \beta_{\textit{D2, County:Time}}^i & \text{Year 2} \end{cases}$
 
 We are then most interested in visualizing the posterior of $\theta_{County:Time}$. The off-diagonal elements of $\Sigma$ will also tell us about the stability of the random effect over time.
 
@@ -665,13 +667,10 @@ Race-specific covariates
 - Total Population
 - log(B:W Assault Arrest Rate)
 - log(B:W Population)
-** Simulate Data
-#+BEGIN_SRC R :session :results none :export code
-  randint <- rnorm
-#+END_SRC
-** Stan Code
-#+NAME: stan-lme
-#+BEGIN_SRC stan
+** Step 1: Shooting ~ Race | Population, Dataset
+*** Stan Code
+#+NAME: stan-lme1
+#+BEGIN_SRC stan :eval no
   data {
     int<lower=0> nc ; // number of counties
     int<lower=0> Cb1[nc];
@@ -679,19 +678,21 @@ Race-specific covariates
     int<lower=0> Cw1[nc];
     int<lower=0> Cw2[nc];
     int<lower=0> pDemo; // number of demographic predictors
-    vector[pDemo] xDemo[nc]; // hold demographic predictors
+    //  vector[pDemo] xDemo[nc]; // hold demographic predictors
     real xOffset[nc,2]; // offset predictor (for each subpopulation)
   }
   transformed data {
-    //  int<lower=0> p;
-    vector[pDemo + 5] x[nc,2,2]; // nc, race, year, predictor (+1 for intercept, in last)
+    int<lower=0> p;
+    vector[pDemo + 6] x[nc,2,2]; // nc, race, year, predictor (+1 for intercept, in last)
     int<lower=0> C[nc,2,2]; // number of shootings for county i, race j, time k
-    //  p = pDemo + 5; // number of predictors (demographics + offset + race + int + ranint + ranslope)
+    p = pDemo + 6; // number of predictors (demographics + offset + race + int + ranint + ranslope)
     for (i in 1:nc){
-      x[i,1,1,1:pDemo] = xDemo[i]; // black year 1
-      x[i,1,2,1:pDemo] = xDemo[i]; // black year 2
-      x[i,2,1,1:pDemo] = rep_vector(0,pDemo); // white year 1
-      x[i,2,2,1:pDemo] = rep_vector(0,pDemo); // white year 2
+      // if (pDemo>0){
+      //   x[i,1,1,1:pDemo] = xDemo[i]; // black year 1
+      //   x[i,1,2,1:pDemo] = xDemo[i]; // black year 2
+      //   x[i,2,1,1:pDemo] = rep_vector(0,pDemo); // white year 1
+      //   x[i,2,2,1:pDemo] = rep_vector(0,pDemo); // white year 2
+      // }
 
       x[i,1,1,pDemo+1] = log(xOffset[i,1]); // population (offset), log scale for offset
       x[i,1,2,pDemo+1] = log(xOffset[i,1]); // population (offset), log scale for offset
@@ -719,6 +720,407 @@ Race-specific covariates
       x[i,2,1,pDemo+5] = 0; // dummy code for county:time:race specific beta
       x[i,2,2,pDemo+5] = 0; // dummy code for county:time:race specific beta
 
+      x[i,1,1,pDemo+6] = 0; // dummy code for dataset fx
+      x[i,1,2,pDemo+6] = 1; // dummy code for dataset fx
+      x[i,2,1,pDemo+6] = 0; // dummy code for dataset fx
+      x[i,2,2,pDemo+6] = 1; // dummy code for dataset fx
+
+  
+
+    }
+
+
+
+    for (i in 1:nc){
+      C[i,1,1] = Cb1[i];
+      C[i,1,2] = Cb2[i];
+      C[i,2,1] = Cw1[i];
+      C[i,2,2] = Cw2[i];
+    }
+
+
+  }
+  parameters {
+    //row_vector[pDemo] beta_RaceDemo; // race:demographic interaction betas
+    real beta_Int; // intercept
+    real beta_Race; // race fx
+    real beta_Data; // effect of data source
+    row_vector[2] beta_CountyTime[nc]; // ranfx for county:time
+    row_vector[2] beta_RaceCountyTime[nc]; //ranfx for county:time:race
+    cov_matrix[2] SigmaCountyTime; // covar for county:time
+    cov_matrix[2] SigmaRaceCountyTime; // covar for county:time:race
+
+
+
+  }
+  transformed parameters {
+    row_vector[pDemo+6] theta[nc,2,2]; // setup a theta predictor for each observation
+    for (i in 1:nc){
+      // if (pDemo>0){
+      //   theta[i,1,1,1:pDemo] = beta_RaceDemo; // black year 1
+      //   theta[i,1,2,1:pDemo] = beta_RaceDemo; // black year 2
+      //   theta[i,2,1,1:pDemo] = beta_RaceDemo; // white year 1
+      //   theta[i,2,2,1:pDemo] = beta_RaceDemo; // white year 2
+      // }
+
+      theta[i,1,1,pDemo+1] = 1; // population (offset)
+      theta[i,1,2,pDemo+1] = 1; // population (offset)
+      theta[i,2,1,pDemo+1] = 1; // population (offset)
+      theta[i,2,2,pDemo+1] = 1; // population (offset)
+
+      theta[i,1,1,pDemo+2] = beta_Race; // race (black)
+      theta[i,1,2,pDemo+2] = beta_Race; // race (black)
+      theta[i,2,1,pDemo+2] = beta_Race; // race (black)
+      theta[i,2,2,pDemo+2] = beta_Race; // race (black)
+
+      theta[i,1,1,pDemo+3] = beta_Int; // intercept (global)
+      theta[i,1,2,pDemo+3] = beta_Int; // intercept (global)
+      theta[i,2,1,pDemo+3] = beta_Int; // intercept (global)
+      theta[i,2,2,pDemo+3] = beta_Int; // intercept (global)
+
+      theta[i,1,1,pDemo+4] = beta_CountyTime[i,1]; // county:time specific beta
+      theta[i,1,2,pDemo+4] = beta_CountyTime[i,2]; // county:time specific beta
+      theta[i,2,1,pDemo+4] = beta_CountyTime[i,1]; // county:time specific beta
+      theta[i,2,2,pDemo+4] = beta_CountyTime[i,2]; // county:time specific beta
+
+      theta[i,1,1,pDemo+5] = beta_RaceCountyTime[i,1]; // county:time:race specific beta
+      theta[i,1,2,pDemo+5] = beta_RaceCountyTime[i,2]; // county:time:race specific beta
+      theta[i,2,1,pDemo+5] = beta_RaceCountyTime[i,1]; // county:time:race specific beta
+      theta[i,2,2,pDemo+5] = beta_RaceCountyTime[i,2]; // county:time:race specific beta
+
+      theta[i,1,1,pDemo+6] = beta_Data; // fx of data source
+      theta[i,1,2,pDemo+6] = beta_Data; // fx of data source
+      theta[i,2,1,pDemo+6] = beta_Data; // fx of data source
+      theta[i,2,2,pDemo+6] = beta_Data; // fx of data source
+    }
+
+
+
+  }
+  model {
+    for (i in 1:nc){
+      for (j in 1:2){
+        for (k in 1:2){
+          C[i,j,k] ~ poisson_log(theta[i,j,k] * x[i,j,k]);
+        }
+      }
+    }
+    beta_CountyTime ~ multi_normal(rep_row_vector(0,2),SigmaCountyTime);
+    beta_RaceCountyTime ~ multi_normal(rep_row_vector(0,2),SigmaRaceCountyTime);
+    }
+
+  generated quantities {
+    real RR[nc,2]; // relative risks (B/W) by year
+    real<lower=0> lambda[nc,2,2] ; // lambda defines the poisson
+    for (i in 1:nc){
+      for (j in 1:2){
+        for (k in 1:2){
+          lambda[i,j,k] = exp(theta[i,j,k] * x[i,j,k]);
+        }
+      }
+    }
+  
+    for (i in 1:nc){
+      for (k in 1:2){
+        RR[i,k] = lambda[i,1,k] / lambda[i,2,k];
+      }
+    }
+  }
+#+END_SRC
+
+#+BEGIN_SRC R :session :noweb yes :results none
+  stanmodel <- '
+  <<stan-lme1>>
+  '
+#+END_SRC
+*** R Code
+
+#+BEGIN_SRC R :session
+  stanprep <- unarmed.counts[complete.cases(unarmed.counts),]
+  stanprep <- unarmed.counts
+  stanprep$log.BW.AssaultRatio <- log(stanprep$BW.AssaultRatio)
+  stanprep$log.BW.PopRatio <- log(stanprep$BW.PopRatio)
+
+  #temp <- stanprep[,c('log.BW.PopRatio'),drop=FALSE]
+  #mask <- apply(temp,1,function(x){all(is.finite(x))})
+  #stanprep <- stanprep[mask,]
+
+
+  standata <- list(
+      nc = nrow(stanprep),
+      Cb1 = stanprep$B.uspsd,
+      Cb2 = stanprep$B.wapo,
+      Cw1 = stanprep$W.uspsd,
+      Cw2 = stanprep$W.wapo,
+      pDemo = 0,
+      xDemo = with(stanprep,cbind(log(TotPop),log(BW.PopRatio))),
+      xOffset = cbind(stanprep$BlackPop,stanprep$WhitePop)
+      )
+
+
+
+  #fit <- stan(model_code=stanmodel, data = standata,thin = 1,iter=1000, warmup = 100, chains = 1, refresh = 10)
+  fit1 <- stan(model_code=stanmodel, data = standata,thin = 1,iter=4000, warmup = 2000, chains = 1, refresh = 10)
+
+  ex1 <- extract(fit1)
+#+END_SRC
+
+** Step 2: Shooting ~ Race | Population, Dataset, B:W Ratio
+*** Stan Code
+#+NAME: stan-lme2
+#+BEGIN_SRC stan :eval no
+  data {
+    int<lower=0> nc ; // number of counties
+    int<lower=0> Cb1[nc];
+    int<lower=0> Cb2[nc]; 
+    int<lower=0> Cw1[nc];
+    int<lower=0> Cw2[nc];
+    int<lower=0> pDemo; // number of demographic predictors
+    real xDemo[nc]; // hold demographic predictors
+    real xOffset[nc,2]; // offset predictor (for each subpopulation)
+  }
+  transformed data {
+    int<lower=0> p;
+    vector[pDemo + 6] x[nc,2,2]; // nc, race, year, predictor (+1 for intercept, in last)
+    int<lower=0> C[nc,2,2]; // number of shootings for county i, race j, time k
+    p = pDemo + 6; // number of predictors (demographics + offset + race + int + ranint + ranslope)
+    for (i in 1:nc){
+      x[i,1,1,1] = xDemo[i]; // black year 1
+      x[i,1,2,1] = xDemo[i]; // black year 2
+      x[i,2,1,1] = 0; // white year 1
+      x[i,2,2,1] = 0; // white year 2
+
+
+      x[i,1,1,pDemo+1] = log(xOffset[i,1]); // population (offset), log scale for offset
+      x[i,1,2,pDemo+1] = log(xOffset[i,1]); // population (offset), log scale for offset
+      x[i,2,1,pDemo+1] = log(xOffset[i,2]); // population (offset), log scale for offset
+      x[i,2,2,pDemo+1] = log(xOffset[i,2]); // population (offset), log scale for offset
+
+      x[i,1,1,pDemo+2] = 1; // race (black)
+      x[i,1,2,pDemo+2] = 1; // race (black)
+      x[i,2,1,pDemo+2] = 0; // race (black)
+      x[i,2,2,pDemo+2] = 0; // race (black)
+
+
+      x[i,1,1,pDemo+3] = 1; // intercept
+      x[i,1,2,pDemo+3] = 1; // intercept
+      x[i,2,1,pDemo+3] = 1; // intercept
+      x[i,2,2,pDemo+3] = 1; // intercept
+
+      x[i,1,1,pDemo+4] = 1; // dummy code for county:time specific beta
+      x[i,1,2,pDemo+4] = 1; // dummy code for county:time specific beta
+      x[i,2,1,pDemo+4] = 1; // dummy code for county:time specific beta
+      x[i,2,2,pDemo+4] = 1; // dummy code for county:time specific beta
+
+      x[i,1,1,pDemo+5] = 1; // dummy code for county:time:race specific beta
+      x[i,1,2,pDemo+5] = 1; // dummy code for county:time:race specific beta
+      x[i,2,1,pDemo+5] = 0; // dummy code for county:time:race specific beta
+      x[i,2,2,pDemo+5] = 0; // dummy code for county:time:race specific beta
+
+      x[i,1,1,pDemo+6] = 0; // dummy code for dataset fx
+      x[i,1,2,pDemo+6] = 1; // dummy code for dataset fx
+      x[i,2,1,pDemo+6] = 0; // dummy code for dataset fx
+      x[i,2,2,pDemo+6] = 1; // dummy code for dataset fx
+
+
+
+    }
+
+
+
+    for (i in 1:nc){
+      C[i,1,1] = Cb1[i];
+      C[i,1,2] = Cb2[i];
+      C[i,2,1] = Cw1[i];
+      C[i,2,2] = Cw2[i];
+    }
+
+
+  }
+  parameters {
+    real beta_RaceDemo; // race:demographic interaction betas
+    real beta_Int; // intercept
+    real beta_Race; // race fx
+    real beta_Data; // effect of data source
+    row_vector[2] beta_CountyTime[nc]; // ranfx for county:time
+    row_vector[2] beta_RaceCountyTime[nc]; //ranfx for county:time:race
+    cov_matrix[2] SigmaCountyTime; // covar for county:time
+    cov_matrix[2] SigmaRaceCountyTime; // covar for county:time:race
+
+
+
+  }
+  transformed parameters {
+    row_vector[pDemo+6] theta[nc,2,2]; // setup a theta predictor for each observation
+    for (i in 1:nc){
+      theta[i,1,1,1] = beta_RaceDemo; // black year 1
+      theta[i,1,2,1] = beta_RaceDemo; // black year 2
+      theta[i,2,1,1] = beta_RaceDemo; // white year 1
+      theta[i,2,2,1] = beta_RaceDemo; // white year 2
+
+      theta[i,1,1,pDemo+1] = 1; // population (offset)
+      theta[i,1,2,pDemo+1] = 1; // population (offset)
+      theta[i,2,1,pDemo+1] = 1; // population (offset)
+      theta[i,2,2,pDemo+1] = 1; // population (offset)
+
+      theta[i,1,1,pDemo+2] = beta_Race; // race (black)
+      theta[i,1,2,pDemo+2] = beta_Race; // race (black)
+      theta[i,2,1,pDemo+2] = beta_Race; // race (black)
+      theta[i,2,2,pDemo+2] = beta_Race; // race (black)
+
+      theta[i,1,1,pDemo+3] = beta_Int; // intercept (global)
+      theta[i,1,2,pDemo+3] = beta_Int; // intercept (global)
+      theta[i,2,1,pDemo+3] = beta_Int; // intercept (global)
+      theta[i,2,2,pDemo+3] = beta_Int; // intercept (global)
+
+      theta[i,1,1,pDemo+4] = beta_CountyTime[i,1]; // county:time specific beta
+      theta[i,1,2,pDemo+4] = beta_CountyTime[i,2]; // county:time specific beta
+      theta[i,2,1,pDemo+4] = beta_CountyTime[i,1]; // county:time specific beta
+      theta[i,2,2,pDemo+4] = beta_CountyTime[i,2]; // county:time specific beta
+
+      theta[i,1,1,pDemo+5] = beta_RaceCountyTime[i,1]; // county:time:race specific beta
+      theta[i,1,2,pDemo+5] = beta_RaceCountyTime[i,2]; // county:time:race specific beta
+      theta[i,2,1,pDemo+5] = beta_RaceCountyTime[i,1]; // county:time:race specific beta
+      theta[i,2,2,pDemo+5] = beta_RaceCountyTime[i,2]; // county:time:race specific beta
+
+      theta[i,1,1,pDemo+6] = beta_Data; // fx of data source
+      theta[i,1,2,pDemo+6] = beta_Data; // fx of data source
+      theta[i,2,1,pDemo+6] = beta_Data; // fx of data source
+      theta[i,2,2,pDemo+6] = beta_Data; // fx of data source
+    }
+
+
+
+  }
+  model {
+    for (i in 1:nc){
+      for (j in 1:2){
+        for (k in 1:2){
+          C[i,j,k] ~ poisson_log(theta[i,j,k] * x[i,j,k]);
+        }
+      }
+    }
+    beta_CountyTime ~ multi_normal(rep_row_vector(0,2),SigmaCountyTime);
+    beta_RaceCountyTime ~ multi_normal(rep_row_vector(0,2),SigmaRaceCountyTime);
+    }
+
+  generated quantities {
+    real RR[nc,2]; // relative risks (B/W) by year
+    real<lower=0> lambda[nc,2,2] ; // lambda defines the poisson
+    for (i in 1:nc){
+      for (j in 1:2){
+        for (k in 1:2){
+          lambda[i,j,k] = exp(theta[i,j,k] * x[i,j,k]);
+        }
+      }
+    }
+
+    for (i in 1:nc){
+      for (k in 1:2){
+        RR[i,k] = lambda[i,1,k] / lambda[i,2,k];
+      }
+    }
+  }
+#+END_SRC
+
+#+BEGIN_SRC R :session :noweb yes :results none
+  stanmodel <- '
+  <<stan-lme2>>
+  '
+#+END_SRC
+
+*** R Code
+
+#+BEGIN_SRC R :session
+  stanprep <- unarmed.counts[complete.cases(unarmed.counts),]
+  stanprep <- unarmed.counts
+  stanprep$log.BW.AssaultRatio <- log(stanprep$BW.AssaultRatio)
+  stanprep$log.BW.PopRatio <- log(stanprep$BW.PopRatio)
+
+  temp <- stanprep[,c('log.BW.PopRatio'),drop=FALSE]
+  mask <- apply(temp,1,function(x){all(is.finite(x))})
+  stanprep <- stanprep[mask,]
+
+
+  standata <- list(
+      nc = nrow(stanprep),
+      Cb1 = stanprep$B.uspsd,
+      Cb2 = stanprep$B.wapo,
+      Cw1 = stanprep$W.uspsd,
+      Cw2 = stanprep$W.wapo,
+      pDemo = 1,
+      xDemo = log(stanprep$BW.PopRatio),
+      xOffset = cbind(stanprep$BlackPop,stanprep$WhitePop)
+  )
+
+
+
+
+  #fit <- stan(model_code=stanmodel, data = standata,thin = 1,iter=1000, warmup = 100, chains = 1, refresh = 10)
+  fit2 <- stan(model_code=stanmodel, data = standata,thin = 1,iter=4000, warmup = 2000, chains = 1, refresh = 10)
+
+  ex2 <- extract(fit2)
+#+END_SRC
+
+** Step 3: Shooting ~ Race | Population, Dataset, B:W Ratio, Arrest Rate Ratio
+*** Stan Code
+#+NAME: stan-lme3
+#+BEGIN_SRC stan :eval no
+  data {
+    int<lower=0> nc ; // number of counties
+    int<lower=0> Cb1[nc];
+    int<lower=0> Cb2[nc]; 
+    int<lower=0> Cw1[nc];
+    int<lower=0> Cw2[nc];
+    int<lower=0> pDemo; // number of demographic predictors
+    vector[pDemo] xDemo[nc]; // hold demographic predictors
+    real xOffset[nc,2]; // offset predictor (for each subpopulation)
+  }
+  transformed data {
+    int<lower=0> p;
+    vector[pDemo + 6] x[nc,2,2]; // nc, race, year, predictor (+1 for intercept, in last)
+    int<lower=0> C[nc,2,2]; // number of shootings for county i, race j, time k
+    p = pDemo + 6; // number of predictors (demographics + offset + race + int + ranint + ranslope)
+    for (i in 1:nc){
+      x[i,1,1,1:pDemo] = xDemo[i]; // black year 1
+      x[i,1,2,1:pDemo] = xDemo[i]; // black year 2
+      x[i,2,1,1:pDemo] = rep_vector(0,pDemo); // white year 1
+      x[i,2,2,1:pDemo] = rep_vector(0,pDemo); // white year 2
+
+
+      x[i,1,1,pDemo+1] = log(xOffset[i,1]); // population (offset), log scale for offset
+      x[i,1,2,pDemo+1] = log(xOffset[i,1]); // population (offset), log scale for offset
+      x[i,2,1,pDemo+1] = log(xOffset[i,2]); // population (offset), log scale for offset
+      x[i,2,2,pDemo+1] = log(xOffset[i,2]); // population (offset), log scale for offset
+
+      x[i,1,1,pDemo+2] = 1; // race (black)
+      x[i,1,2,pDemo+2] = 1; // race (black)
+      x[i,2,1,pDemo+2] = 0; // race (black)
+      x[i,2,2,pDemo+2] = 0; // race (black)
+
+
+      x[i,1,1,pDemo+3] = 1; // intercept
+      x[i,1,2,pDemo+3] = 1; // intercept
+      x[i,2,1,pDemo+3] = 1; // intercept
+      x[i,2,2,pDemo+3] = 1; // intercept
+
+      x[i,1,1,pDemo+4] = 1; // dummy code for county:time specific beta
+      x[i,1,2,pDemo+4] = 1; // dummy code for county:time specific beta
+      x[i,2,1,pDemo+4] = 1; // dummy code for county:time specific beta
+      x[i,2,2,pDemo+4] = 1; // dummy code for county:time specific beta
+
+      x[i,1,1,pDemo+5] = 1; // dummy code for county:time:race specific beta
+      x[i,1,2,pDemo+5] = 1; // dummy code for county:time:race specific beta
+      x[i,2,1,pDemo+5] = 0; // dummy code for county:time:race specific beta
+      x[i,2,2,pDemo+5] = 0; // dummy code for county:time:race specific beta
+
+      x[i,1,1,pDemo+6] = 0; // dummy code for dataset fx
+      x[i,1,2,pDemo+6] = 1; // dummy code for dataset fx
+      x[i,2,1,pDemo+6] = 0; // dummy code for dataset fx
+      x[i,2,2,pDemo+6] = 1; // dummy code for dataset fx
+
+
+
     }
 
 
@@ -736,6 +1138,7 @@ Race-specific covariates
     row_vector[pDemo] beta_RaceDemo; // race:demographic interaction betas
     real beta_Int; // intercept
     real beta_Race; // race fx
+    real beta_Data; // effect of data source
     row_vector[2] beta_CountyTime[nc]; // ranfx for county:time
     row_vector[2] beta_RaceCountyTime[nc]; //ranfx for county:time:race
     cov_matrix[2] SigmaCountyTime; // covar for county:time
@@ -745,8 +1148,7 @@ Race-specific covariates
 
   }
   transformed parameters {
-    //  real<lower=0> lambda[nc,2,2] ; // lambda defines the poisson
-    row_vector[pDemo+5] theta[nc,2,2]; // setup a theta predictor for each observation
+    row_vector[pDemo+6] theta[nc,2,2]; // setup a theta predictor for each observation
     for (i in 1:nc){
       theta[i,1,1,1:pDemo] = beta_RaceDemo; // black year 1
       theta[i,1,2,1:pDemo] = beta_RaceDemo; // black year 2
@@ -777,7 +1179,14 @@ Race-specific covariates
       theta[i,1,2,pDemo+5] = beta_RaceCountyTime[i,2]; // county:time:race specific beta
       theta[i,2,1,pDemo+5] = beta_RaceCountyTime[i,1]; // county:time:race specific beta
       theta[i,2,2,pDemo+5] = beta_RaceCountyTime[i,2]; // county:time:race specific beta
+
+      theta[i,1,1,pDemo+6] = beta_Data; // fx of data source
+      theta[i,1,2,pDemo+6] = beta_Data; // fx of data source
+      theta[i,2,1,pDemo+6] = beta_Data; // fx of data source
+      theta[i,2,2,pDemo+6] = beta_Data; // fx of data source
     }
+
+
 
   }
   model {
@@ -791,22 +1200,41 @@ Race-specific covariates
     beta_CountyTime ~ multi_normal(rep_row_vector(0,2),SigmaCountyTime);
     beta_RaceCountyTime ~ multi_normal(rep_row_vector(0,2),SigmaRaceCountyTime);
     }
+
+  generated quantities {
+    real RR[nc,2]; // relative risks (B/W) by year
+    real<lower=0> lambda[nc,2,2] ; // lambda defines the poisson
+    for (i in 1:nc){
+      for (j in 1:2){
+        for (k in 1:2){
+          lambda[i,j,k] = exp(theta[i,j,k] * x[i,j,k]);
+        }
+      }
+    }
+
+    for (i in 1:nc){
+      for (k in 1:2){
+        RR[i,k] = lambda[i,1,k] / lambda[i,2,k];
+      }
+    }
+  }
 #+END_SRC
-** R Code
+
 #+BEGIN_SRC R :session :noweb yes :results none
   stanmodel <- '
-  <<stan-lme>>
+  <<stan-lme3>>
   '
 #+END_SRC
 
-
+*** R Code
 
 #+BEGIN_SRC R :session
+  stanprep <- unarmed.counts[complete.cases(unarmed.counts),]
   stanprep <- unarmed.counts
   stanprep$log.BW.AssaultRatio <- log(stanprep$BW.AssaultRatio)
   stanprep$log.BW.PopRatio <- log(stanprep$BW.PopRatio)
 
-  temp <- stanprep[,c('log.BW.AssaultRatio','log.BW.PopRatio')]
+  temp <- stanprep[,c('log.BW.PopRatio','log.BW.AssaultRatio'),drop=FALSE]
   mask <- apply(temp,1,function(x){all(is.finite(x))})
   stanprep <- stanprep[mask,]
 
@@ -818,7 +1246,236 @@ Race-specific covariates
       Cw1 = stanprep$W.uspsd,
       Cw2 = stanprep$W.wapo,
       pDemo = 2,
-      xDemo = with(stanprep,cbind(log(BW.AssaultRatio),log(BW.PopRatio))),
+      xDemo = with(stanprep,cbind(log(BW.PopRatio),log(BW.AssaultRatio))),
+      xOffset = cbind(stanprep$BlackPop,stanprep$WhitePop)
+  )
+
+
+
+
+
+  #fit <- stan(model_code=stanmodel, data = standata,thin = 1,iter=1000, warmup = 100, chains = 1, refresh = 10)
+  fit3 <- stan(model_code=stanmodel, data = standata,thin = 1,iter=4000, warmup = 2000, chains = 1, refresh = 10)
+
+  ex3 <- extract(fit3)
+
+
+#+END_SRC
+** Summarize Models
+#+BEGIN_SRC R :session
+  exp(mean(ex1$beta_Race))
+  exp(mean(ex2$beta_Race))
+  exp(mean(ex3$beta_Race))
+
+  mean(ex1$SigmaRaceCountyTime[,1,1])
+  mean(ex2$SigmaRaceCountyTime[,1,1])
+  mean(ex3$SigmaRaceCountyTime[,1,1])
+
+
+  mean(ex1$SigmaRaceCountyTime[,1,2])
+  mean(ex2$SigmaRaceCountyTime[,1,2])
+  mean(ex3$SigmaRaceCountyTime[,1,2])
+
+#+END_SRC
+* Old
+** Stan Code
+#+NAME: stan-lme
+#+BEGIN_SRC stan
+  data {
+    int<lower=0> nc ; // number of counties
+    int<lower=0> Cb1[nc];
+    int<lower=0> Cb2[nc]; 
+    int<lower=0> Cw1[nc];
+    int<lower=0> Cw2[nc];
+    int<lower=0> pDemo; // number of demographic predictors
+    //  vector[pDemo] xDemo[nc]; // hold demographic predictors
+    real xOffset[nc,2]; // offset predictor (for each subpopulation)
+  }
+  transformed data {
+    int<lower=0> p;
+    vector[pDemo + 6] x[nc,2,2]; // nc, race, year, predictor (+1 for intercept, in last)
+    int<lower=0> C[nc,2,2]; // number of shootings for county i, race j, time k
+    p = pDemo + 6; // number of predictors (demographics + offset + race + int + ranint + ranslope)
+    for (i in 1:nc){
+      // if (pDemo>0){
+      //   x[i,1,1,1:pDemo] = xDemo[i]; // black year 1
+      //   x[i,1,2,1:pDemo] = xDemo[i]; // black year 2
+      //   x[i,2,1,1:pDemo] = rep_vector(0,pDemo); // white year 1
+      //   x[i,2,2,1:pDemo] = rep_vector(0,pDemo); // white year 2
+      // }
+
+      x[i,1,1,pDemo+1] = log(xOffset[i,1]); // population (offset), log scale for offset
+      x[i,1,2,pDemo+1] = log(xOffset[i,1]); // population (offset), log scale for offset
+      x[i,2,1,pDemo+1] = log(xOffset[i,2]); // population (offset), log scale for offset
+      x[i,2,2,pDemo+1] = log(xOffset[i,2]); // population (offset), log scale for offset
+
+      x[i,1,1,pDemo+2] = 1; // race (black)
+      x[i,1,2,pDemo+2] = 1; // race (black)
+      x[i,2,1,pDemo+2] = 0; // race (black)
+      x[i,2,2,pDemo+2] = 0; // race (black)
+
+
+      x[i,1,1,pDemo+3] = 1; // intercept
+      x[i,1,2,pDemo+3] = 1; // intercept
+      x[i,2,1,pDemo+3] = 1; // intercept
+      x[i,2,2,pDemo+3] = 1; // intercept
+
+      x[i,1,1,pDemo+4] = 1; // dummy code for county:time specific beta
+      x[i,1,2,pDemo+4] = 1; // dummy code for county:time specific beta
+      x[i,2,1,pDemo+4] = 1; // dummy code for county:time specific beta
+      x[i,2,2,pDemo+4] = 1; // dummy code for county:time specific beta
+
+      x[i,1,1,pDemo+5] = 1; // dummy code for county:time:race specific beta
+      x[i,1,2,pDemo+5] = 1; // dummy code for county:time:race specific beta
+      x[i,2,1,pDemo+5] = 0; // dummy code for county:time:race specific beta
+      x[i,2,2,pDemo+5] = 0; // dummy code for county:time:race specific beta
+
+      x[i,1,1,pDemo+6] = 0; // dummy code for dataset fx
+      x[i,1,2,pDemo+6] = 1; // dummy code for dataset fx
+      x[i,2,1,pDemo+6] = 0; // dummy code for dataset fx
+      x[i,2,2,pDemo+6] = 1; // dummy code for dataset fx
+
+
+
+    }
+
+
+
+    for (i in 1:nc){
+      C[i,1,1] = Cb1[i];
+      C[i,1,2] = Cb2[i];
+      C[i,2,1] = Cw1[i];
+      C[i,2,2] = Cw2[i];
+    }
+
+
+  }
+  parameters {
+    //row_vector[pDemo] beta_RaceDemo; // race:demographic interaction betas
+    real beta_Int; // intercept
+    real beta_Race; // race fx
+    real beta_Data; // effect of data source
+    row_vector[2] beta_CountyTime[nc]; // ranfx for county:time
+    row_vector[2] beta_RaceCountyTime[nc]; //ranfx for county:time:race
+    cov_matrix[2] SigmaCountyTime; // covar for county:time
+    cov_matrix[2] SigmaRaceCountyTime; // covar for county:time:race
+
+
+
+  }
+  transformed parameters {
+    row_vector[pDemo+6] theta[nc,2,2]; // setup a theta predictor for each observation
+    for (i in 1:nc){
+      // if (pDemo>0){
+      //   theta[i,1,1,1:pDemo] = beta_RaceDemo; // black year 1
+      //   theta[i,1,2,1:pDemo] = beta_RaceDemo; // black year 2
+      //   theta[i,2,1,1:pDemo] = beta_RaceDemo; // white year 1
+      //   theta[i,2,2,1:pDemo] = beta_RaceDemo; // white year 2
+      // }
+
+      theta[i,1,1,pDemo+1] = 1; // population (offset)
+      theta[i,1,2,pDemo+1] = 1; // population (offset)
+      theta[i,2,1,pDemo+1] = 1; // population (offset)
+      theta[i,2,2,pDemo+1] = 1; // population (offset)
+
+      theta[i,1,1,pDemo+2] = beta_Race; // race (black)
+      theta[i,1,2,pDemo+2] = beta_Race; // race (black)
+      theta[i,2,1,pDemo+2] = beta_Race; // race (black)
+      theta[i,2,2,pDemo+2] = beta_Race; // race (black)
+
+      theta[i,1,1,pDemo+3] = beta_Int; // intercept (global)
+      theta[i,1,2,pDemo+3] = beta_Int; // intercept (global)
+      theta[i,2,1,pDemo+3] = beta_Int; // intercept (global)
+      theta[i,2,2,pDemo+3] = beta_Int; // intercept (global)
+
+      theta[i,1,1,pDemo+4] = beta_CountyTime[i,1]; // county:time specific beta
+      theta[i,1,2,pDemo+4] = beta_CountyTime[i,2]; // county:time specific beta
+      theta[i,2,1,pDemo+4] = beta_CountyTime[i,1]; // county:time specific beta
+      theta[i,2,2,pDemo+4] = beta_CountyTime[i,2]; // county:time specific beta
+
+      theta[i,1,1,pDemo+5] = beta_RaceCountyTime[i,1]; // county:time:race specific beta
+      theta[i,1,2,pDemo+5] = beta_RaceCountyTime[i,2]; // county:time:race specific beta
+      theta[i,2,1,pDemo+5] = beta_RaceCountyTime[i,1]; // county:time:race specific beta
+      theta[i,2,2,pDemo+5] = beta_RaceCountyTime[i,2]; // county:time:race specific beta
+
+      theta[i,1,1,pDemo+6] = beta_Data; // fx of data source
+      theta[i,1,2,pDemo+6] = beta_Data; // fx of data source
+      theta[i,2,1,pDemo+6] = beta_Data; // fx of data source
+      theta[i,2,2,pDemo+6] = beta_Data; // fx of data source
+    }
+
+
+
+  }
+  model {
+    for (i in 1:nc){
+      for (j in 1:2){
+        for (k in 1:2){
+          C[i,j,k] ~ poisson_log(theta[i,j,k] * x[i,j,k]);
+        }
+      }
+    }
+    beta_CountyTime ~ multi_normal(rep_row_vector(0,2),SigmaCountyTime);
+    beta_RaceCountyTime ~ multi_normal(rep_row_vector(0,2),SigmaRaceCountyTime);
+    }
+
+  generated quantities {
+    real RR[nc,2]; // relative risks (B/W) by year
+    real<lower=0> lambda[nc,2,2] ; // lambda defines the poisson
+    for (i in 1:nc){
+      for (j in 1:2){
+        for (k in 1:2){
+          lambda[i,j,k] = exp(theta[i,j,k] * x[i,j,k]);
+        }
+      }
+    }
+
+    for (i in 1:nc){
+      for (k in 1:2){
+        RR[i,k] = lambda[i,1,k] / lambda[i,2,k];
+      }
+    }
+  }
+#+END_SRC
+** R Code
+#+BEGIN_SRC R :session :noweb yes :results none
+  stanmodel <- '
+  <<stan-lme>>
+  '
+#+END_SRC
+
+
+
+#+BEGIN_SRC R :session
+  stanprep <- unarmed.counts[complete.cases(unarmed.counts),]
+  stanprep <- unarmed.counts
+  stanprep$log.BW.AssaultRatio <- log(stanprep$BW.AssaultRatio)
+  stanprep$log.BW.PopRatio <- log(stanprep$BW.PopRatio)
+
+  temp <- stanprep[,c('log.BW.PopRatio'),drop=FALSE]
+  mask <- apply(temp,1,function(x){all(is.finite(x))})
+  stanprep <- stanprep[mask,]
+
+
+  standata <- list(
+      nc = nrow(stanprep),
+      Cb1 = stanprep$B.uspsd,
+      Cb2 = stanprep$B.wapo,
+      Cw1 = stanprep$W.uspsd,
+      Cw2 = stanprep$W.wapo,
+      pDemo = 2,
+      xDemo = with(stanprep,cbind(log(TotPop),log(BW.PopRatio))),
+      xOffset = cbind(stanprep$BlackPop,stanprep$WhitePop)
+  )
+
+  standata <- list(
+      nc = nrow(stanprep),
+      Cb1 = stanprep$B.uspsd,
+      Cb2 = stanprep$B.wapo,
+      Cw1 = stanprep$W.uspsd,
+      Cw2 = stanprep$W.wapo,
+      pDemo = 0,
+      xDemo = with(stanprep,cbind(log(TotPop),log(BW.PopRatio))),
       xOffset = cbind(stanprep$BlackPop,stanprep$WhitePop)
       )
 
@@ -827,7 +1484,7 @@ Race-specific covariates
   fit <- stan(model_code=stanmodel, data = standata,thin = 1,iter=1000, warmup = 100, chains = 1, refresh = 10)
   fit <- stan(model_code=stanmodel, data = standata,thin = 1,iter=4000, warmup = 2000, chains = 1, refresh = 10)
 #+END_SRC
-* Old
+
 ** Modeling
 *** Poisson
 
