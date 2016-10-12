@@ -1,7 +1,7 @@
 library(dplyr)
 library(tidyr)
 
-raw.cens <- read.csv('CC-EST2015-ALLDATA.csv')
+raw.cens <- read.csv('CC-EST2015-ALLDATA.csv.gz')
 
 raw.mpv <- read.csv('MPVDatasetDownload.csv')
 
