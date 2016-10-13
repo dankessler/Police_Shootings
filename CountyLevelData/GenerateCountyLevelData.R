@@ -7,9 +7,9 @@ raw.mpv <- read.csv('MPVDatasetDownload.csv')
 
 ## we need to "tidy" the census data
 
-cens <- select(raw.cens,STNAME:AGEGRP,NHWAC_MALE:H_FEMALE) %>%
+cens <- select(raw.cens,STNAME:AGEGRP,TOT_POP,NHWAC_MALE:H_FEMALE) %>%
     filter(YEAR %in% 3:8) %>%
-    gather(demo,Pop,NHWAC_MALE:H_FEMALE) %>%
+    gather(demo,Pop,TOT_POP,NHWAC_MALE:H_FEMALE) %>%
     separate(demo,c('Race','Gender')) %>%
     group_by(CTYNAME,STNAME,YEAR,Race) %>% summarise(Pop=sum(Pop)) %>% ungroup %>%
     mutate(YEAR=recode(YEAR,
@@ -46,7 +46,31 @@ mpv <- raw.mpv %>%
 
 ## now put the two datasets together
 shoot <- left_join(cens,mpv) %>%
+    mutate(Race=recode(Race,
+                       NHBAC='Black',
+                       NHWAC='White',
+                       H='Hispanic',
+                       NHAAC='Asian',
+                       NHIAC='Native.American',
+                       NHNAC='Pacific.Islander')) %>%
     spread(ArmedStatus,n,fill=0) %>%
     select(-`<NA>`)
 
 write.csv(shoot,'ShootingsByCounty.csv')
+
+## structure it wide for CS
+shoot.wide <- shoot %>%
+    mutate(Race=recode(Race,
+                       NHBAC='Black',
+                       NHWAC='White',
+                       H='Hispanic',
+                       NHAAC='Asian',
+                       NHIAC='Native.American',
+                       NHNAC='Pacific.Islander')) %>%
+    filter(YEAR > 2012) %>%
+    gather(ArmedStatus,Shootings,Allegedly.Armed:Vehicle) %>%
+    gather(Measure,N,Pop,Shootings) %>%
+    unite(RaceYearArmedMeasure,YEAR:Measure) %>%
+    spread(RaceYearArmedMeasure,N)
+
+write.csv(shoot.wide,'ShootingsByCounty_wide.csv')
