@@ -1,3 +1,17 @@
+#+OPTIONS: ':nil *:t -:t ::t <:t H:3 \n:nil ^:t arch:headline
+#+OPTIONS: author:t c:nil creator:nil d:(not "LOGBOOK") date:t e:t
+#+OPTIONS: email:nil f:t inline:t num:t p:nil pri:nil prop:nil stat:t
+#+OPTIONS: tags:t tasks:t tex:t timestamp:t title:t toc:t todo:t |:t
+#+TITLE: PoliceShootings
+#+DATE: <2016-11-04 Fri>
+#+AUTHOR: Daniel Kessler
+#+EMAIL: kesslerd@umich.edu
+#+LANGUAGE: en
+#+SELECT_TAGS: export
+#+EXCLUDE_TAGS: noexport
+#+CREATOR: Emacs 24.5.1 (Org mode 8.3.5)
+
+
 * Introduction
 ** The Problem
 US has recently witness a number of high-profile deaths of African-Americans at the hands of the police
