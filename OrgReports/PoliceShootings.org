@@ -9,13 +9,28 @@ There is a pressing need to study this phenomenon quantitatively. Why?
 - Case reports are insufficient and could even be misleading
 - Better understand the causes
 - Help shape solutions
-** An Important Step Forward
-** Key Results
 ** Present work
 Main Questions
 1. Are Ross's main results replicated in WashPo database?
 2. Is there temporal stability in spatial variation in risk ratios?
-* Data Processing: 2 Datasets
+* Data
+** Police Shooting
+*** WaPo
+The Washington Post maintains a database of people shot dead by the police. They provide landing pages with visualizations and descriptions for both [[https://www.washingtonpost.com/graphics/national/police-shootings/][2015]] and [[https://www.washingtonpost.com/graphics/national/police-shootings-2016/][2016]].
+
+The raw data is under version control at [[https://github.com/washingtonpost/data-police-shootings][github]].
+*** USPSD
+[[http://goo.gl/Su60Cm][The U.S. Police Shootings Database]] is an open contribution platform to collect reports of police shootings of civilians from news reports.
+*** MappingPoliceViolence
+As described at their [[http://mappingpoliceviolence.org/aboutthedata/][website]], MPV aggregates data from [[http://www.fatalencounters.org/][Fatal Encounters]], the [[https://us-police-shootings-database.silk.co/][US Police Shooting Database]], and [[http://killedbypolice.net/][Killed By Police]], and does original research to further improve quality and completeness.
+
+#+BEGIN_SRC R :session
+
+#+END_SRC
+** Regional Demographic Data
+*** US Census
+We obtain county-level demographic data from the US Census. Specifically, we use [[http://www.census.gov/popest/data/counties/asrh/2015/CC-EST2015-ALLDATA.html][this file]] that includes annually adjusted/estimated values for 2010-2015 (see associated [[http://www.census.gov/popest/data/counties/asrh/2015/files/CC-EST2015-ALLDATA.pdf][keyfile]]).
+* Old Data Processing: 2 Datasets
 ** Goal
 Our goal is to arrive at a dataset where each row encodes one county. We will have four outcome measures per county (Period X Race). We also require the following covariates
 - Black Population (for use as offset)
@@ -149,8 +164,14 @@ For all of the counties that appear in our merged file, we add county level demo
   unarmed.counts <- merge(unarmed.counts,county.demographics,all.x=TRUE,all.y=FALSE)
 #+END_SRC
 * Temporal Stability Analysis
-** Math
-The following approach draws its inspiration from Generalized Linear Mixed Effects Models, but is articulated in a manner consistent with a Bayesian framework as implemented in stan.
+** Motivation
+We are principally interesting in understanding
+1. Racial Disparity in Fatal Shooting, as Indexed by Relative Risk
+2. Entrenchment of racial disparity, as measured by persistence over time
+
+
+
+The following approach draws its inspiration from Generalized Linear Mixed Effects Models, but is articulated in a manner consistent with a Bayesian framework as implemented in Stan.
 
 Let $C_x$ be an observed count of shootings with associated predictors $x$. For example, $C_x$ could be the number of white people shot in Orange County, Florida, and the associated x would encode the provenance as well as demographic predictors.
 
@@ -159,7 +180,7 @@ $C_x \sim \text{Poisson}(\lambda_x)$
 
 $\lambda_x = e^{\theta'x}$
 
-$\theta$ is the vector of coefficients for the GLM. 
+$\theta$ is the vector of coefficients for the GLM.
 
 Let $\theta$ have block structure as 
 
@@ -167,7 +188,7 @@ $\theta = \begin{bmatrix} \theta_{Race:Demo} & \theta_{Offset} & \theta_{Race}  
 
 In most cases the elements of $\theta_{*}$ are simply one or more beta coefficients, which unless otherwise specified have uninformative priors.
 
-Introduce two additional random variable, 
+Introduce two additional random variables, 
 
 $\vec{\beta}_{County:Time}^{i} = \begin{bmatrix} \beta_{\textit{D1, County:Time}}^i & \beta_{\textit{D2, County:Time}}^i \end{bmatrix}$
 
